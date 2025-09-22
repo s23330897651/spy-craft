@@ -1,6 +1,7 @@
 <script lang="ts">
 	interface CompanyData {
 		companyName: string;
+		companyWebsite: string;
 	}
 
 	interface ResearchEntry {
@@ -14,7 +15,8 @@
 
 	let activeTab: 'research' | 'summaries' = 'research';
 	let formData: CompanyData = {
-		companyName: ''
+		companyName: '',
+		companyWebsite: ''
 	};
 	let summaries: ResearchEntry[] = [];
 	let isLoading = false;
@@ -38,8 +40,8 @@
 	}
 
 	async function submitResearch() {
-		if (!formData.companyName.trim()) {
-			error = 'Company name is required';
+		if (!formData.companyName.trim() || !formData.companyWebsite.trim()) {
+			error = 'Company name and website are required';
 			return;
 		}
 
@@ -56,7 +58,8 @@
 					'Accept': 'application/json'
 				},
 				body: JSON.stringify({
-					companyName: formData.companyName
+					companyName: formData.companyName,
+					companyWebsite: formData.companyWebsite
 				})
 			});
 
@@ -71,8 +74,9 @@
 			const parsedWhole = safeParseJSON<Record<string, unknown>>(raw);
 			if (parsedWhole) raw = parsedWhole;
 
+			// Treat invalid/blank overall responses as no results (instead of throwing)
 			if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
-				throw new Error('Unexpected response shape. Expected an object keyed by categories.');
+				raw = {};
 			}
 
 			const newEntries: ResearchEntry[] = [];
@@ -129,17 +133,26 @@
 				}
 			}
 
-			if (newEntries.length > 0) {
-				summaries = [...newEntries, ...summaries];
-
-				formData = {
-					companyName: ''
+			// If nothing usable was found, add a placeholder entry
+			if (newEntries.length === 0) {
+				const placeholder: ResearchEntry = {
+					id: `${Date.now()}-no-results`,
+					companyName: formData.companyName,
+					category: 'Research',
+					title: 'No articles found',
+					summary: '',
+					url: '#'
 				};
-
-				activeTab = 'summaries';
+				summaries = [placeholder, ...summaries];
 			} else {
-				error = 'No items found in response.';
+				summaries = [...newEntries, ...summaries];
 			}
+
+			formData = {
+				companyName: '',
+				companyWebsite: ''
+			};
+			activeTab = 'summaries';
 		} catch (err) {
 			console.error('Error submitting research:', err);
 			const message = err instanceof Error ? err.message : 'Failed to submit research request';
@@ -209,7 +222,24 @@
               />
             </div>
 
-            <button type="submit" class="submit-btn" disabled={isLoading}>
+            <div class="form-group">
+              <label for="companyWebsite" class="label">Company Website *</label>
+              <input 
+                id="companyWebsite"
+                type="url"
+                bind:value={formData.companyWebsite}
+                placeholder="https://example.com"
+                class="input"
+                disabled={isLoading}
+                required
+              />
+            </div>
+
+            <button
+              type="submit"
+              class="submit-btn"
+              disabled={isLoading || !formData.companyName.trim() || !formData.companyWebsite.trim()}
+            >
               {#if isLoading}
                 <svg class="spinner" viewBox="0 0 24 24">
                   <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none"/>
