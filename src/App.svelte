@@ -25,71 +25,10 @@
 	// Use your n8n production URL (workflow is active)
 	const webhookUrl = 'https://n8n.intelligentresourcing.co/webhook/d95c8e70-5cb1-4323-838b-8a910fbecf65';
 
-	function safeParseJSON<T = unknown>(value: unknown): T | null {
-		if (typeof value !== 'string') return null;
-		try {
-			return JSON.parse(value) as T;
-		} catch {
-			return null;
-		}
-	}
-
-	function peel(value: unknown, maxDepth = 2): unknown {
-		let cur: unknown = value;
-		let depth = 0;
-		while (typeof cur === 'string' && depth < maxDepth) {
-			const parsed = safeParseJSON(cur);
-			if (parsed === null) break;
-			cur = parsed;
-			depth++;
-		}
-		return cur;
-	}
-
-	function toEntriesFromList(payload: unknown, companyName: string): ResearchEntry[] {
-		// Normalize payload to an array
-		let list: unknown = payload;
-		if (typeof list === 'string') {
-			const parsed = safeParseJSON(list);
-			if (parsed !== null) list = parsed;
-		}
-		const arr = Array.isArray(list) ? list : [];
-
-		const out: ResearchEntry[] = [];
-		arr.forEach((element, idx) => {
-			const node = peel(element);
-			if (!node || typeof node !== 'object' || Array.isArray(node)) return;
-
-			for (const [categoryKey, rawVal] of Object.entries(node as Record<string, unknown>)) {
-				const category = categoryKey.toString();
-
-				let v: unknown = peel(rawVal);
-				const items = Array.isArray(v) ? v : [v];
-
-				items.forEach((it, j) => {
-					let rec: unknown = peel(it);
-					if (!rec || typeof rec !== 'object' || Array.isArray(rec)) return;
-
-					const r = rec as Record<string, unknown>;
-					const title = (r.title ?? '').toString();
-					const summary = (r.summary ?? '').toString();
-					const url = (r.url ?? '').toString();
-					const errorText = (r.error ?? '').toString();
-
-					if (!title && !summary && !url && !errorText) return;
-
-					out.push({
-						id: `${Date.now()}-${idx}-${j}-${category}`,
-						companyName,
-						category,
-						title: title || (errorText ? `${category} Error` : ''),
-						summary: summary || errorText,
-						url: url || '#'
-					});
-				});
-			}
-		});
-		return out;
+	let __uid = 0;
+	function makeId(suffix: string): string {
+		__uid++;
+		return `${Date.now()}-${__uid}-${suffix}`;
 	}
 
 	async function submitResearch() {
@@ -121,18 +60,36 @@
 				throw new Error(`HTTP ${response.status} ${response.statusText}${text ? ` - ${text}` : ''}`);
 			}
 
-			let raw: unknown;
-			try {
-				raw = await response.json();
-			} catch {
-				raw = await response.text();
-			}
+			const raw: unknown = await response.json();
 
-			const newEntries = toEntriesFromList(raw, formData.companyName);
+			const newEntries: ResearchEntry[] = [];
+			if (Array.isArray(raw)) {
+				for (let i = 0; i < raw.length; i++) {
+					const item = raw[i];
+					if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+
+					const rec = item as Record<string, unknown>;
+					const title = (rec.title ?? '').toString();
+					const summary = (rec.summary ?? '').toString();
+					const url = (rec.url ?? '').toString();
+					const category = (rec.category ?? 'Research').toString();
+
+					if (!title && !summary && !url) continue;
+
+					newEntries.push({
+						id: makeId(category || 'item'),
+						companyName: formData.companyName,
+						category: category || 'Research',
+						title,
+						summary,
+						url: url || '#'
+					});
+				}
+			}
 
 			if (newEntries.length === 0) {
 				const placeholder: ResearchEntry = {
-					id: `${Date.now()}-no-results`,
+					id: makeId('no-results'),
 					companyName: formData.companyName,
 					category: 'Research',
 					title: 'No articles found',
