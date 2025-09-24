@@ -23,7 +23,7 @@
 	let error = '';
 
 	// Use your n8n production URL (workflow is active)
-	const webhookUrl = 'https://webhook-processor-production-fd04.up.railway.app/webhook/d95c8e70-5cb1-4323-838b-8a910fbecf65';
+	const webhookUrl = 'https://n8n.intelligentresourcing.co/webhook/d95c8e70-5cb1-4323-838b-8a910fbecf65';
 
 	function isNullCategory(key: unknown): boolean {
 		const k = (key ?? '').toString().trim().toLowerCase();
