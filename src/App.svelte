@@ -39,11 +39,106 @@
 		}
 	}
 
-	function forEachCategory(obj: Record<string, unknown>, cb: (category: string, value: unknown) => void) {
-		for (const [categoryKey, value] of Object.entries(obj)) {
-			if (isNullCategory(categoryKey)) continue;
-			cb(categoryKey.toString(), value);
+	// Attempts to peel nested stringified JSON one or two layers
+	function peelJSON(value: unknown, maxDepth = 2): unknown {
+		let current: unknown = value;
+		let depth = 0;
+		while (typeof current === 'string' && depth < maxDepth) {
+			const parsed = safeParseJSON<unknown>(current);
+			if (parsed === null) break;
+			current = parsed;
+			depth++;
 		}
+		return current;
+	}
+
+	let __uid = 0;
+	function makeId(category: string): string {
+		__uid++;
+		return `${Date.now()}-${__uid}-${category}`;
+	}
+
+	function normalizeValueToItems(value: unknown): Record<string, unknown>[] {
+		const peeled = peelJSON(value);
+
+		if (Array.isArray(peeled)) {
+			const out: Record<string, unknown>[] = [];
+			for (let it of peeled as unknown[]) {
+				it = peelJSON(it);
+				if (it && typeof it === 'object' && !Array.isArray(it)) {
+					out.push(it as Record<string, unknown>);
+				}
+			}
+			return out;
+		}
+
+		if (peeled && typeof peeled === 'object' && !Array.isArray(peeled)) {
+			return [peeled as Record<string, unknown>];
+		}
+
+		return [];
+	}
+
+	function toEntriesFromPayload(payload: unknown, companyName: string): ResearchEntry[] {
+		const entries: ResearchEntry[] = [];
+
+		const consumeCategory = (category: string, rawVal: unknown) => {
+			if (isNullCategory(category)) return;
+
+			const items = normalizeValueToItems(rawVal);
+			for (let i = 0; i < items.length; i++) {
+				const obj = items[i] || {};
+				if (typeof obj !== 'object' || Array.isArray(obj)) continue;
+
+				const rec = obj as Record<string, unknown>;
+				const title = (rec.title ?? '').toString();
+				const summary = (rec.summary ?? '').toString();
+				const url = (rec.url ?? '').toString();
+				const errorText = (rec.error ?? '').toString();
+
+				// Accept entries with any of: title/summary/url/error
+				if (title || summary || url || errorText) {
+					entries.push({
+						id: makeId(category),
+						companyName,
+						category,
+						title: title || (errorText ? `${category} Error` : ''),
+						summary: summary || errorText,
+						url: url || '#'
+					});
+				}
+			}
+		};
+
+		const peeled = peelJSON(payload);
+
+		if (Array.isArray(peeled)) {
+			for (const el of peeled) {
+				const node = peelJSON(el);
+				if (node && typeof node === 'object' && !Array.isArray(node)) {
+					for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
+						consumeCategory(k, v);
+					}
+				} else if (typeof node === 'string') {
+					const parsed = peelJSON(node);
+					if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+						for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+							consumeCategory(k, v);
+						}
+					}
+				}
+			}
+			return entries;
+		}
+
+		if (peeled && typeof peeled === 'object' && !Array.isArray(peeled)) {
+			for (const [k, v] of Object.entries(peeled as Record<string, unknown>)) {
+				consumeCategory(k, v);
+			}
+			return entries;
+		}
+
+		return entries;
 	}
 
 	async function submitResearch() {
@@ -75,83 +170,20 @@
 				throw new Error(`HTTP ${response.status} ${response.statusText}${text ? ` - ${text}` : ''}`);
 			}
 
-			let raw: unknown = await response.json();
-
-			// If backend returns a stringified JSON as a whole, parse it first
-			const parsedWhole = safeParseJSON<unknown>(raw);
-			if (parsedWhole !== null) raw = parsedWhole;
-
-			const newEntries: ResearchEntry[] = [];
-
-			const consumeItems = (category: string, value: unknown) => {
-				let items: unknown[] = [];
-
-				if (Array.isArray(value)) {
-					items = value;
-				} else if (typeof value === 'string') {
-					const parsed = safeParseJSON<unknown>(value);
-					if (Array.isArray(parsed)) {
-						items = parsed;
-					} else if (parsed && typeof parsed === 'object') {
-						items = [parsed];
-					} else {
-						return;
-					}
-				} else if (value && typeof value === 'object') {
-					items = [value];
-				} else {
-					return;
-				}
-
-				for (let i = 0; i < items.length; i++) {
-					let item = items[i];
-
-					if (typeof item === 'string') {
-						const parsed = safeParseJSON<Record<string, unknown>>(item);
-						if (parsed) item = parsed;
-						else continue;
-					}
-
-					if (!item || typeof item !== 'object') continue;
-
-					const obj = item as Record<string, unknown>;
-					const title = (obj.title ?? '').toString();
-					const summary = (obj.summary ?? '').toString();
-					const url = (obj.url ?? '').toString();
-					const errorText = (obj.error ?? '').toString();
-
-					// Accept items that have at least title/summary/url OR an error message
-					if (title || summary || url || errorText) {
-						newEntries.push({
-							id: `${Date.now()}-${category}-${i}`,
-							companyName: formData.companyName,
-							category,
-							title: title || (errorText ? `${category} Error` : ''),
-							summary: summary || errorText,
-							url: url || '#'
-						});
-					}
-				}
-			};
-
-			// Support both object and top-level array payloads
-			if (Array.isArray(raw)) {
-				for (const entry of raw) {
-					if (typeof entry === 'string') {
-						const parsed = safeParseJSON<Record<string, unknown>>(entry);
-						if (parsed) forEachCategory(parsed, (cat, val) => consumeItems(cat, val));
-					} else if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
-						forEachCategory(entry as Record<string, unknown>, (cat, val) => consumeItems(cat, val));
-					}
-				}
-			} else if (raw && typeof raw === 'object') {
-				forEachCategory(raw as Record<string, unknown>, (cat, val) => consumeItems(cat, val));
+			let raw: unknown;
+			// Try JSON first; if that fails, fall back to text and parse
+			try {
+				raw = await response.json();
+			} catch {
+				const txt = await response.text();
+				raw = txt;
 			}
 
-			// If nothing usable was found, add a placeholder entry
+			const newEntries = toEntriesFromPayload(raw, formData.companyName);
+
 			if (newEntries.length === 0) {
 				const placeholder: ResearchEntry = {
-					id: `${Date.now()}-no-results`,
+					id: makeId('no-results'),
 					companyName: formData.companyName,
 					category: 'Research',
 					title: 'No articles found',
