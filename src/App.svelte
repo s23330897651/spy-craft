@@ -25,11 +25,6 @@
 	// Use your n8n production URL (workflow is active)
 	const webhookUrl = 'https://n8n.intelligentresourcing.co/webhook/d95c8e70-5cb1-4323-838b-8a910fbecf65';
 
-	function isNullCategory(key: unknown): boolean {
-		const k = (key ?? '').toString().trim().toLowerCase();
-		return k === '' || k === 'null' || k === 'undefined';
-	}
-
 	function safeParseJSON<T = unknown>(value: unknown): T | null {
 		if (typeof value !== 'string') return null;
 		try {
@@ -39,106 +34,62 @@
 		}
 	}
 
-	// Attempts to peel nested stringified JSON one or two layers
-	function peelJSON(value: unknown, maxDepth = 2): unknown {
-		let current: unknown = value;
+	function peel(value: unknown, maxDepth = 2): unknown {
+		let cur: unknown = value;
 		let depth = 0;
-		while (typeof current === 'string' && depth < maxDepth) {
-			const parsed = safeParseJSON<unknown>(current);
+		while (typeof cur === 'string' && depth < maxDepth) {
+			const parsed = safeParseJSON(cur);
 			if (parsed === null) break;
-			current = parsed;
+			cur = parsed;
 			depth++;
 		}
-		return current;
+		return cur;
 	}
 
-	let __uid = 0;
-	function makeId(category: string): string {
-		__uid++;
-		return `${Date.now()}-${__uid}-${category}`;
-	}
-
-	function normalizeValueToItems(value: unknown): Record<string, unknown>[] {
-		const peeled = peelJSON(value);
-
-		if (Array.isArray(peeled)) {
-			const out: Record<string, unknown>[] = [];
-			for (let it of peeled as unknown[]) {
-				it = peelJSON(it);
-				if (it && typeof it === 'object' && !Array.isArray(it)) {
-					out.push(it as Record<string, unknown>);
-				}
-			}
-			return out;
+	function toEntriesFromList(payload: unknown, companyName: string): ResearchEntry[] {
+		// Normalize payload to an array
+		let list: unknown = payload;
+		if (typeof list === 'string') {
+			const parsed = safeParseJSON(list);
+			if (parsed !== null) list = parsed;
 		}
+		const arr = Array.isArray(list) ? list : [];
 
-		if (peeled && typeof peeled === 'object' && !Array.isArray(peeled)) {
-			return [peeled as Record<string, unknown>];
-		}
+		const out: ResearchEntry[] = [];
+		arr.forEach((element, idx) => {
+			const node = peel(element);
+			if (!node || typeof node !== 'object' || Array.isArray(node)) return;
 
-		return [];
-	}
+			for (const [categoryKey, rawVal] of Object.entries(node as Record<string, unknown>)) {
+				const category = categoryKey.toString();
 
-	function toEntriesFromPayload(payload: unknown, companyName: string): ResearchEntry[] {
-		const entries: ResearchEntry[] = [];
+				let v: unknown = peel(rawVal);
+				const items = Array.isArray(v) ? v : [v];
 
-		const consumeCategory = (category: string, rawVal: unknown) => {
-			if (isNullCategory(category)) return;
+				items.forEach((it, j) => {
+					let rec: unknown = peel(it);
+					if (!rec || typeof rec !== 'object' || Array.isArray(rec)) return;
 
-			const items = normalizeValueToItems(rawVal);
-			for (let i = 0; i < items.length; i++) {
-				const obj = items[i] || {};
-				if (typeof obj !== 'object' || Array.isArray(obj)) continue;
+					const r = rec as Record<string, unknown>;
+					const title = (r.title ?? '').toString();
+					const summary = (r.summary ?? '').toString();
+					const url = (r.url ?? '').toString();
+					const errorText = (r.error ?? '').toString();
 
-				const rec = obj as Record<string, unknown>;
-				const title = (rec.title ?? '').toString();
-				const summary = (rec.summary ?? '').toString();
-				const url = (rec.url ?? '').toString();
-				const errorText = (rec.error ?? '').toString();
+					if (!title && !summary && !url && !errorText) return;
 
-				// Accept entries with any of: title/summary/url/error
-				if (title || summary || url || errorText) {
-					entries.push({
-						id: makeId(category),
+					out.push({
+						id: `${Date.now()}-${idx}-${j}-${category}`,
 						companyName,
 						category,
 						title: title || (errorText ? `${category} Error` : ''),
 						summary: summary || errorText,
 						url: url || '#'
 					});
-				}
+				});
 			}
-		};
-
-		const peeled = peelJSON(payload);
-
-		if (Array.isArray(peeled)) {
-			for (const el of peeled) {
-				const node = peelJSON(el);
-				if (node && typeof node === 'object' && !Array.isArray(node)) {
-					for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
-						consumeCategory(k, v);
-					}
-				} else if (typeof node === 'string') {
-					const parsed = peelJSON(node);
-					if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-						for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
-							consumeCategory(k, v);
-						}
-					}
-				}
-			}
-			return entries;
-		}
-
-		if (peeled && typeof peeled === 'object' && !Array.isArray(peeled)) {
-			for (const [k, v] of Object.entries(peeled as Record<string, unknown>)) {
-				consumeCategory(k, v);
-			}
-			return entries;
-		}
-
-		return entries;
+		});
+		return out;
 	}
 
 	async function submitResearch() {
@@ -171,19 +122,17 @@
 			}
 
 			let raw: unknown;
-			// Try JSON first; if that fails, fall back to text and parse
 			try {
 				raw = await response.json();
 			} catch {
-				const txt = await response.text();
-				raw = txt;
+				raw = await response.text();
 			}
 
-			const newEntries = toEntriesFromPayload(raw, formData.companyName);
+			const newEntries = toEntriesFromList(raw, formData.companyName);
 
 			if (newEntries.length === 0) {
 				const placeholder: ResearchEntry = {
-					id: makeId('no-results'),
+					id: `${Date.now()}-no-results`,
 					companyName: formData.companyName,
 					category: 'Research',
 					title: 'No articles found',
