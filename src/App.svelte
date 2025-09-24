@@ -32,101 +32,117 @@
 	}
 
 	async function submitResearch() {
-    if (!formData.companyName.trim() || !formData.companyWebsite.trim()) {
-      error = 'Company name and website are required';
-      return;
-    }
+	if (!formData.companyName.trim() || !formData.companyWebsite.trim()) {
+		error = 'Company name and website are required';
+		return;
+	}
 
-    isLoading = true;
-    error = '';
+	isLoading = true;
+	error = '';
 
-    try {
-      const payload = {
-        companyName: formData.companyName,
-        companyWebsite: formData.companyWebsite
-      };
-      console.log('Submitting research to webhook:', webhookUrl, payload);
+	try {
+		const payload = {
+			companyName: formData.companyName,
+			companyWebsite: formData.companyWebsite
+		};
+		console.log('Submitting research to webhook:', webhookUrl, payload);
 
-      const response = await fetch(webhookUrl, {
-        method: 'POST',
-        mode: 'cors',
-        credentials: 'omit',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json'
-        },
-        body: JSON.stringify(payload)
-      });
+		const response = await fetch(webhookUrl, {
+			method: 'POST',
+			mode: 'cors',
+			credentials: 'omit',
+			headers: {
+				'Content-Type': 'application/json',
+				'Accept': 'application/json'
+			},
+			body: JSON.stringify(payload)
+		});
 
-      console.log('Webhook response status:', response.status, response.statusText);
-      const rawText = await response.clone().text().catch(() => '');
-      console.log('Webhook raw body:', rawText);
+		console.log('Webhook response status:', response.status, response.statusText);
 
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status} ${response.statusText}${rawText ? ` - ${rawText}` : ''}`);
-      }
+		const rawText = await response.text();
+		console.log('Webhook raw body length:', rawText.length);
+		console.log('Webhook raw body (preview 1k):', rawText.slice(0, 1000));
 
-      let raw: unknown;
-      try {
-        raw = await response.json();
-      } catch {
-        raw = rawText;
-      }
-      console.log('Webhook parsed payload:', raw);
+		if (!response.ok) {
+			throw new Error(`HTTP ${response.status} ${response.statusText}${rawText ? ` - ${rawText}` : ''}`);
+		}
 
-      const newEntries: ResearchEntry[] = [];
-      if (Array.isArray(raw)) {
-        for (let i = 0; i < raw.length; i++) {
-          const item = raw[i];
-          if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+		let data: unknown = null;
+		try {
+			data = JSON.parse(rawText);
+		} catch {
+			console.warn('Response was not valid JSON.');
+			data = null;
+		}
 
-          const rec = item as Record<string, unknown>;
-          const title = (rec.title ?? '').toString();
-          const summary = (rec.summary ?? '').toString();
-          const url = (rec.url ?? '').toString();
-          const category = (rec.category ?? 'Research').toString();
+		console.log('Parsed payload type:', Array.isArray(data) ? 'array' : typeof data);
 
-          if (!title && !summary && !url) continue;
+		const newEntries: ResearchEntry[] = [];
+		if (Array.isArray(data)) {
+			console.log('Array length:', data.length);
+			data.forEach((item, idx) => {
+				console.log(`Item[${idx}]`, item);
 
-          newEntries.push({
-            id: `${Date.now()}-${i}-${category}`,
-            companyName: formData.companyName,
-            category: category || 'Research',
-            title,
-            summary,
-            url: url || '#'
-          });
-        }
-      }
-      console.log('Mapped entries:', newEntries);
+				if (!item || typeof item !== 'object' || Array.isArray(item)) {
+					console.log(`Skipping non-object item[${idx}].`);
+					return;
+				}
 
-      if (newEntries.length === 0) {
-        const placeholder: ResearchEntry = {
-          id: `${Date.now()}-no-results`,
-          companyName: formData.companyName,
-          category: 'Research',
-          title: 'No articles found',
-          summary: '',
-          url: '#'
-        };
-        summaries = [placeholder, ...summaries];
-      } else {
-        summaries = [...newEntries, ...summaries];
-      }
+				const rec = item as Record<string, unknown>;
+				const title = typeof rec.title === 'string' ? rec.title : '';
+				const summary = typeof rec.summary === 'string' ? rec.summary : '';
+				const url = typeof rec.url === 'string' ? rec.url : '';
+				const category = typeof rec.category === 'string' ? rec.category : 'Research';
 
-      formData = {
-        companyName: '',
-        companyWebsite: ''
-      };
-      activeTab = 'summaries';
-    } catch (err) {
-      console.error('Error submitting research:', err);
-      const message = err instanceof Error ? err.message : 'Failed to submit research request';
-      error = message.includes('Failed to fetch') ? 'Failed to fetch (likely CORS). See note below.' : message;
-    } finally {
-      isLoading = false;
-    }
-  }
+				if (!title && !summary && !url) {
+					console.log(`Skipping item[${idx}] due to missing title/summary/url.`, rec);
+					return;
+				}
+
+				newEntries.push({
+					id: makeId(category || 'item'),
+					companyName: formData.companyName,
+					category: category || 'Research',
+					title,
+					summary,
+					url: url || '#'
+				});
+			});
+		} else {
+			console.warn('Expected an array payload; nothing to map.');
+		}
+
+		console.log('Mapped entries count:', newEntries.length);
+		console.table(newEntries.map(e => ({ category: e.category, title: e.title, url: e.url })));
+
+		if (newEntries.length === 0) {
+			const placeholder: ResearchEntry = {
+				id: makeId('no-results'),
+				companyName: formData.companyName,
+				category: 'Research',
+				title: 'No articles found',
+				summary: '',
+				url: '#'
+			};
+			summaries = [placeholder, ...summaries];
+		} else {
+			summaries = [...newEntries, ...summaries];
+		}
+
+		formData = {
+			companyName: '',
+			companyWebsite: ''
+		};
+		activeTab = 'summaries';
+	} catch (err) {
+		console.error('Error submitting research:', err);
+		const message = err instanceof Error ? err.message : 'Failed to submit research request';
+		error = message.includes('Failed to fetch') ? 'Failed to fetch (likely CORS). See note below.' : message;
+	} finally {
+		isLoading = false;
+	}
+}
 
 	function clearSummaries() {
 		summaries = [];
