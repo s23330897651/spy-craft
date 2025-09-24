@@ -39,6 +39,13 @@
 		}
 	}
 
+	function forEachCategory(obj: Record<string, unknown>, cb: (category: string, value: unknown) => void) {
+		for (const [categoryKey, value] of Object.entries(obj)) {
+			if (isNullCategory(categoryKey)) continue;
+			cb(categoryKey.toString(), value);
+		}
+	}
+
 	async function submitResearch() {
 		if (!formData.companyName.trim() || !formData.companyWebsite.trim()) {
 			error = 'Company name and website are required';
@@ -68,25 +75,17 @@
 				throw new Error(`HTTP ${response.status} ${response.statusText}${text ? ` - ${text}` : ''}`);
 			}
 
-			let raw = await response.json();
+			let raw: unknown = await response.json();
 
 			// If backend returns a stringified JSON as a whole, parse it first
-			const parsedWhole = safeParseJSON<Record<string, unknown>>(raw);
-			if (parsedWhole) raw = parsedWhole;
-
-			// Treat invalid/blank overall responses as no results (instead of throwing)
-			if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
-				raw = {};
-			}
+			const parsedWhole = safeParseJSON<unknown>(raw);
+			if (parsedWhole !== null) raw = parsedWhole;
 
 			const newEntries: ResearchEntry[] = [];
 
-			for (const [categoryKey, value] of Object.entries(raw)) {
-				if (isNullCategory(categoryKey)) continue;
-
-				const category = categoryKey.toString();
-
+			const consumeItems = (category: string, value: unknown) => {
 				let items: unknown[] = [];
+
 				if (Array.isArray(value)) {
 					items = value;
 				} else if (typeof value === 'string') {
@@ -96,12 +95,12 @@
 					} else if (parsed && typeof parsed === 'object') {
 						items = [parsed];
 					} else {
-						continue;
+						return;
 					}
 				} else if (value && typeof value === 'object') {
 					items = [value];
 				} else {
-					continue;
+					return;
 				}
 
 				for (let i = 0; i < items.length; i++) {
@@ -119,18 +118,34 @@
 					const title = (obj.title ?? '').toString();
 					const summary = (obj.summary ?? '').toString();
 					const url = (obj.url ?? '').toString();
+					const errorText = (obj.error ?? '').toString();
 
-					if (title || summary || url) {
+					// Accept items that have at least title/summary/url OR an error message
+					if (title || summary || url || errorText) {
 						newEntries.push({
 							id: `${Date.now()}-${category}-${i}`,
 							companyName: formData.companyName,
 							category,
-							title,
-							summary,
+							title: title || (errorText ? `${category} Error` : ''),
+							summary: summary || errorText,
 							url: url || '#'
 						});
 					}
 				}
+			};
+
+			// Support both object and top-level array payloads
+			if (Array.isArray(raw)) {
+				for (const entry of raw) {
+					if (typeof entry === 'string') {
+						const parsed = safeParseJSON<Record<string, unknown>>(entry);
+						if (parsed) forEachCategory(parsed, (cat, val) => consumeItems(cat, val));
+					} else if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
+						forEachCategory(entry as Record<string, unknown>, (cat, val) => consumeItems(cat, val));
+					}
+				}
+			} else if (raw && typeof raw === 'object') {
+				forEachCategory(raw as Record<string, unknown>, (cat, val) => consumeItems(cat, val));
 			}
 
 			// If nothing usable was found, add a placeholder entry
