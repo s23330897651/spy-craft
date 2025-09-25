@@ -75,6 +75,44 @@
         console.warn('Response was not valid JSON.');
       }
 
+      // Helpers (scoped to this function)
+      const isNonEmpty = (v: unknown) => typeof v === 'string' && v.trim().length > 0;
+      const safeParse = (v: unknown): unknown => {
+        if (typeof v !== 'string') return v;
+        try { return JSON.parse(v); } catch { return v; }
+      };
+      const peel = (v: unknown, maxDepth = 2): unknown => {
+        let cur: unknown = v;
+        let d = 0;
+        while (typeof cur === 'string' && d < maxDepth) {
+          const p = safeParse(cur);
+          if (p === cur) break;
+          cur = p;
+          d++;
+        }
+        return cur;
+      };
+      const pushIfValid = (bucket: ResearchEntry[], obj: Record<string, unknown>, categoryHint?: string) => {
+        const err = typeof obj.error === 'string' ? obj.error : '';
+        const title = typeof obj.title === 'string' ? obj.title : '';
+        const summary = typeof obj.summary === 'string' ? obj.summary : '';
+        const url = typeof obj.url === 'string' ? obj.url : '';
+        const category = typeof obj.category === 'string' ? obj.category : (categoryHint || 'Research');
+
+        // Skip if error-only or all fields empty
+        if (isNonEmpty(err) && !isNonEmpty(title) && !isNonEmpty(summary) && !isNonEmpty(url)) return;
+        if (!isNonEmpty(title) && !isNonEmpty(summary) && !isNonEmpty(url)) return;
+
+        bucket.push({
+          id: makeId(category || 'item'),
+          companyName: formData.companyName,
+          category: category || 'Research',
+          title: title || (isNonEmpty(err) ? `${category} Error` : ''),
+          summary: summary || err || '',
+          url: isNonEmpty(url) ? url : '#'
+        });
+      };
+
       // Normalize to array (supports single object or array)
       const list: unknown[] = Array.isArray(data)
         ? data
@@ -83,32 +121,38 @@
       console.log('Normalized list length:', list.length);
 
       const newEntries: ResearchEntry[] = [];
+
       list.forEach((item, idx) => {
-        if (!item || typeof item !== 'object' || Array.isArray(item)) {
-          console.log(`Skipping non-object item[${idx}]`, item);
-          return;
-        }
+        console.log(`Item[${idx}]`, item);
+        if (!item || typeof item !== 'object' || Array.isArray(item)) return;
+
         const rec = item as Record<string, unknown>;
-        const title = typeof rec.title === 'string' ? rec.title : '';
-        const summary = typeof rec.summary === 'string' ? rec.summary : '';
-        const url = typeof rec.url === 'string' ? rec.url : '';
-        const category = typeof rec.category === 'string' ? rec.category : 'Research';
+        const hasDirectShape = ('title' in rec) || ('summary' in rec) || ('url' in rec) || ('category' in rec);
 
-        // Skip non-research rows like { Instagram: "{}" } / { RSS: "..." }
-        const hasExpectedKeys = 'title' in rec || 'summary' in rec || 'url' in rec || 'category' in rec;
-        if (!hasExpectedKeys || (!title && !summary && !url)) {
-          console.log(`Skipping non-research item[${idx}]`, rec);
+        if (hasDirectShape) {
+          pushIfValid(newEntries, rec);
           return;
         }
 
-        newEntries.push({
-          id: makeId(category || 'item'),
-          companyName: formData.companyName,
-          category: category || 'Research',
-          title,
-          summary,
-          url: url || '#'
-        });
+        // Category-bucket style: e.g., { Instagram: "{}", RSS: "{\"error\":\"...\"}" }
+        for (const [categoryKey, rawVal] of Object.entries(rec)) {
+          const category = categoryKey.toString();
+          let v = peel(rawVal);
+
+          // v can be object, array, or primitive
+          if (Array.isArray(v)) {
+            v.forEach((child, j) => {
+              const obj = peel(child);
+              if (obj && typeof obj === 'object' && !Array.isArray(obj)) {
+                pushIfValid(newEntries, obj as Record<string, unknown>, category);
+              }
+            });
+          } else if (v && typeof v === 'object') {
+            pushIfValid(newEntries, v as Record<string, unknown>, category);
+          } else {
+            // Primitive/empty -> skip
+          }
+        }
       });
 
       console.log('Mapped entries count:', newEntries.length);
