@@ -11,6 +11,7 @@
 		title: string;
 		summary: string;
 		url: string;
+		postedDate?: string;
 	}
 
 	let activeTab: 'research' | 'summaries' = 'research';
@@ -31,164 +32,166 @@
 		return `${Date.now()}-${__uid}-${suffix}`;
 	}
 
-  async function submitResearch() {
-    if (!formData.companyName.trim() || !formData.companyWebsite.trim()) {
-      error = 'Company name and website are required';
-      return;
-    }
+	async function submitResearch() {
+		if (!formData.companyName.trim() || !formData.companyWebsite.trim()) {
+			error = 'Company name and website are required';
+			return;
+		}
 
-    isLoading = true;
-    error = '';
+		isLoading = true;
+		error = '';
 
-    try {
-      const payload = {
-        companyName: formData.companyName,
-        companyWebsite: formData.companyWebsite
-      };
-      console.log('Submitting research to webhook:', webhookUrl, payload);
+		try {
+			const payload = {
+				companyName: formData.companyName,
+				companyWebsite: formData.companyWebsite
+			};
+			console.log('Submitting research to webhook:', webhookUrl, payload);
 
-      const response = await fetch(webhookUrl, {
-        method: 'POST',
-        mode: 'cors',
-        credentials: 'omit',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json'
-        },
-        body: JSON.stringify(payload)
-      });
+			const response = await fetch(webhookUrl, {
+				method: 'POST',
+				mode: 'cors',
+				credentials: 'omit',
+				headers: {
+					'Content-Type': 'application/json',
+					'Accept': 'application/json'
+				},
+				body: JSON.stringify(payload)
+			});
 
-      console.log('Webhook response status:', response.status, response.statusText);
+			console.log('Webhook response status:', response.status, response.statusText);
 
-      const rawText = await response.text();
-      console.log('Webhook raw body length:', rawText.length);
-      console.log('Webhook raw body (preview 1k):', rawText.slice(0, 1000));
+			const rawText = await response.text();
+			console.log('Webhook raw body length:', rawText.length);
+			console.log('Webhook raw body (preview 1k):', rawText.slice(0, 1000));
 
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status} ${response.statusText}${rawText ? ` - ${rawText}` : ''}`);
-      }
+			if (!response.ok) {
+				throw new Error(`HTTP ${response.status} ${response.statusText}${rawText ? ` - ${rawText}` : ''}`);
+			}
 
-      let data: unknown = null;
-      try {
-        data = JSON.parse(rawText);
-      } catch {
-        console.warn('Response was not valid JSON.');
-      }
+			let data: unknown = null;
+			try {
+				data = JSON.parse(rawText);
+			} catch {
+				console.warn('Response was not valid JSON.');
+			}
 
-      // Helpers (scoped to this function)
-      const isNonEmpty = (v: unknown) => typeof v === 'string' && v.trim().length > 0;
-      const safeParse = (v: unknown): unknown => {
-        if (typeof v !== 'string') return v;
-        try { return JSON.parse(v); } catch { return v; }
-      };
-      const peel = (v: unknown, maxDepth = 2): unknown => {
-        let cur: unknown = v;
-        let d = 0;
-        while (typeof cur === 'string' && d < maxDepth) {
-          const p = safeParse(cur);
-          if (p === cur) break;
-          cur = p;
-          d++;
-        }
-        return cur;
-      };
-      const pushIfValid = (bucket: ResearchEntry[], obj: Record<string, unknown>, categoryHint?: string) => {
-        const err = typeof obj.error === 'string' ? obj.error : '';
-        const title = typeof obj.title === 'string' ? obj.title : '';
-        const summary = typeof obj.summary === 'string' ? obj.summary : '';
-        const url = typeof obj.url === 'string' ? obj.url : '';
-        const category = typeof obj.category === 'string' ? obj.category : (categoryHint || 'Research');
+			// Helpers (scoped to this function)
+			const isNonEmpty = (v: unknown) => typeof v === 'string' && v.trim().length > 0;
+			const safeParse = (v: unknown): unknown => {
+				if (typeof v !== 'string') return v;
+				try { return JSON.parse(v); } catch { return v; }
+			};
+			const peel = (v: unknown, maxDepth = 2): unknown => {
+				let cur: unknown = v;
+				let d = 0;
+				while (typeof cur === 'string' && d < maxDepth) {
+					const p = safeParse(cur);
+					if (p === cur) break;
+					cur = p;
+					d++;
+				}
+				return cur;
+			};
+			const pushIfValid = (bucket: ResearchEntry[], obj: Record<string, unknown>, categoryHint?: string) => {
+				const err = typeof obj.error === 'string' ? obj.error : '';
+				const title = typeof obj.title === 'string' ? obj.title : '';
+				const summary = typeof obj.summary === 'string' ? obj.summary : '';
+				const url = typeof obj.url === 'string' ? obj.url : '';
+				const category = typeof obj.category === 'string' ? obj.category : (categoryHint || 'Research');
+				const postedDate = typeof obj.postedDate === 'string' ? obj.postedDate : '';
 
-        // Skip if error-only or all fields empty
-        if (isNonEmpty(err) && !isNonEmpty(title) && !isNonEmpty(summary) && !isNonEmpty(url)) return;
-        if (!isNonEmpty(title) && !isNonEmpty(summary) && !isNonEmpty(url)) return;
+				// Skip if error-only or all fields empty
+				if (isNonEmpty(err) && !isNonEmpty(title) && !isNonEmpty(summary) && !isNonEmpty(url)) return;
+				if (!isNonEmpty(title) && !isNonEmpty(summary) && !isNonEmpty(url)) return;
 
-        bucket.push({
-          id: makeId(category || 'item'),
-          companyName: formData.companyName,
-          category: category || 'Research',
-          title: title || (isNonEmpty(err) ? `${category} Error` : ''),
-          summary: summary || err || '',
-          url: isNonEmpty(url) ? url : '#'
-        });
-      };
+				bucket.push({
+					id: makeId(category || 'item'),
+					companyName: formData.companyName,
+					category: category || 'Research',
+					title: title || (isNonEmpty(err) ? `${category} Error` : ''),
+					summary: summary || err || '',
+					url: isNonEmpty(url) ? url : '#',
+					postedDate: postedDate || undefined
+				});
+			};
 
-      // Normalize to array (supports single object or array)
-      const list: unknown[] = Array.isArray(data)
-        ? data
-        : (data && typeof data === 'object' ? [data] : []);
+			// Normalize to array (supports single object or array)
+			const list: unknown[] = Array.isArray(data)
+				? data
+				: (data && typeof data === 'object' ? [data] : []);
 
-      console.log('Normalized list length:', list.length);
+			console.log('Normalized list length:', list.length);
 
-      const newEntries: ResearchEntry[] = [];
+			const newEntries: ResearchEntry[] = [];
 
-      list.forEach((item, idx) => {
-        console.log(`Item[${idx}]`, item);
-        if (!item || typeof item !== 'object' || Array.isArray(item)) return;
+			list.forEach((item, idx) => {
+				console.log(`Item[${idx}]`, item);
+				if (!item || typeof item !== 'object' || Array.isArray(item)) return;
 
-        const rec = item as Record<string, unknown>;
-        const hasDirectShape = ('title' in rec) || ('summary' in rec) || ('url' in rec) || ('category' in rec);
+				const rec = item as Record<string, unknown>;
+				const hasDirectShape = ('title' in rec) || ('summary' in rec) || ('url' in rec) || ('category' in rec) || ('postedDate' in rec);
 
-        if (hasDirectShape) {
-          pushIfValid(newEntries, rec);
-          return;
-        }
+				if (hasDirectShape) {
+					pushIfValid(newEntries, rec);
+					return;
+				}
 
-        // Category-bucket style: e.g., { Instagram: "{}", RSS: "{\"error\":\"...\"}" }
-        for (const [categoryKey, rawVal] of Object.entries(rec)) {
-          const category = categoryKey.toString();
-          let v = peel(rawVal);
+				// Category-bucket style: e.g., { Instagram: "{}", RSS: "{\"error\":\"...\"}" }
+				for (const [categoryKey, rawVal] of Object.entries(rec)) {
+					const category = categoryKey.toString();
+					let v = peel(rawVal);
 
-          // v can be object, array, or primitive
-          if (Array.isArray(v)) {
-            v.forEach((child, j) => {
-              const obj = peel(child);
-              if (obj && typeof obj === 'object' && !Array.isArray(obj)) {
-                pushIfValid(newEntries, obj as Record<string, unknown>, category);
-              }
-            });
-          } else if (v && typeof v === 'object') {
-            pushIfValid(newEntries, v as Record<string, unknown>, category);
-          } else {
-            // Primitive/empty -> skip
-          }
-        }
-      });
+					// v can be object, array, or primitive
+					if (Array.isArray(v)) {
+						v.forEach((child, j) => {
+							const obj = peel(child);
+							if (obj && typeof obj === 'object' && !Array.isArray(obj)) {
+								pushIfValid(newEntries, obj as Record<string, unknown>, category);
+							}
+						});
+					} else if (v && typeof v === 'object') {
+						pushIfValid(newEntries, v as Record<string, unknown>, category);
+					} else {
+						// Primitive/empty -> skip
+					}
+				}
+			});
 
-      console.log('Mapped entries count:', newEntries.length);
-      if (newEntries.length > 0) {
-        console.table(newEntries.map(e => ({ category: e.category, title: e.title, url: e.url })));
-      }
+			console.log('Mapped entries count:', newEntries.length);
+			if (newEntries.length > 0) {
+				console.table(newEntries.map(e => ({ category: e.category, title: e.title, url: e.url, postedDate: e.postedDate || '' })));
+			}
 
-      if (newEntries.length === 0) {
-        const placeholder: ResearchEntry = {
-          id: makeId('no-results'),
-          companyName: formData.companyName,
-          category: 'Research',
-          title: 'No articles found',
-          summary: '',
-          url: '#'
-        };
-        summaries = [placeholder, ...summaries];
-      } else {
-        summaries = [...newEntries, ...summaries];
-      }
-      console.log('Summaries after update (length):', summaries.length);
+			if (newEntries.length === 0) {
+				const placeholder: ResearchEntry = {
+					id: makeId('no-results'),
+					companyName: formData.companyName,
+					category: 'Research',
+					title: 'No articles found',
+					summary: '',
+					url: '#'
+				};
+				summaries = [placeholder, ...summaries];
+			} else {
+				summaries = [...newEntries, ...summaries];
+			}
+			console.log('Summaries after update (length):', summaries.length);
 
-      formData = {
-        companyName: '',
-        companyWebsite: ''
-      };
-      activeTab = 'summaries';
-      console.log('Switched to tab:', activeTab);
-    } catch (err) {
-      console.error('Error submitting research:', err);
-      const message = err instanceof Error ? err.message : 'Failed to submit research request';
-      error = message.includes('Failed to fetch') ? 'Failed to fetch (likely CORS). See note below.' : message;
-    } finally {
-      isLoading = false;
-    }
-  }
+			formData = {
+				companyName: '',
+				companyWebsite: ''
+			};
+			activeTab = 'summaries';
+			console.log('Switched to tab:', activeTab);
+		} catch (err) {
+			console.error('Error submitting research:', err);
+			const message = err instanceof Error ? err.message : 'Failed to submit research request';
+			error = message.includes('Failed to fetch') ? 'Failed to fetch (likely CORS). See note below.' : message;
+		} finally {
+			isLoading = false;
+		}
+	}
 
 	function clearSummaries() {
 		summaries = [];
@@ -306,6 +309,9 @@
               <div class="summary-card">
                 <div class="summary-meta">
                   <span class="category-badge">{entry.category}</span>
+                  {#if entry.postedDate}
+                    <span class="date-badge">{entry.postedDate}</span>
+                  {/if}
                 </div>
 
                 <div class="summary-content">
@@ -677,6 +683,17 @@
       flex-direction: column;
       align-items: flex-start;
       gap: 1rem;
+    }
+
+    .date-badge {
+      display: inline-block;
+      background: #f3f4f6;
+      color: #374151;
+      border-radius: 9999px;
+      padding: 0.125rem 0.5rem;
+      font-size: 0.75rem;
+      font-weight: 600;
+      margin-left: 0.5rem;
     }
   }
 </style>
