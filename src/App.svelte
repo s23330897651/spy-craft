@@ -30,6 +30,20 @@
 		__uid++;
 		return `${Date.now()}-${__uid}-${suffix}`;
 	}
+  function formatDate(value?: string): string {
+    if (!value) return '';
+    const trimmed = value.trim();
+    const parsed = Date.parse(trimmed);
+    if (!Number.isNaN(parsed)) {
+      const d = new Date(parsed);
+      return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+    }
+    const tIdx = trimmed.indexOf('T');
+    if (tIdx > 0) return trimmed.slice(0, tIdx);
+    const spaceIdx = trimmed.indexOf(' ');
+    if (spaceIdx > 0) return trimmed.slice(0, spaceIdx);
+    return trimmed;
+  }
 
 	async function submitResearch() {
 		if (!formData.companyName.trim() || !formData.companyWebsite.trim()) {
@@ -305,7 +319,7 @@
                 <div class="summary-meta">
                   <span class="category-badge">{entry.category}</span>
                   {#if entry.postedDate}
-                    <span class="date-badge" title="Published date">{entry.postedDate}</span>
+                    <span class="date-badge" title={entry.postedDate}>{formatDate(entry.postedDate)}</span>
                   {/if}
                 </div>
 
