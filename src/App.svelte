@@ -3,7 +3,6 @@
 		companyName: string;
 		companyWebsite: string;
 	}
-
 	interface ResearchEntry {
 		id: string;
 		companyName: string;
@@ -37,17 +36,14 @@
 			error = 'Company name and website are required';
 			return;
 		}
-
 		isLoading = true;
 		error = '';
-
 		try {
 			const payload = {
 				companyName: formData.companyName,
 				companyWebsite: formData.companyWebsite
 			};
 			console.log('Submitting research to webhook:', webhookUrl, payload);
-
 			const response = await fetch(webhookUrl, {
 				method: 'POST',
 				mode: 'cors',
@@ -58,17 +54,13 @@
 				},
 				body: JSON.stringify(payload)
 			});
-
 			console.log('Webhook response status:', response.status, response.statusText);
-
 			const rawText = await response.text();
 			console.log('Webhook raw body length:', rawText.length);
 			console.log('Webhook raw body (preview 1k):', rawText.slice(0, 1000));
-
 			if (!response.ok) {
 				throw new Error(`HTTP ${response.status} ${response.statusText}${rawText ? ` - ${rawText}` : ''}`);
 			}
-
 			let data: unknown = null;
 			try {
 				data = JSON.parse(rawText);
@@ -76,7 +68,6 @@
 				console.warn('Response was not valid JSON.');
 			}
 
-			// Helpers (scoped to this function)
 			const isNonEmpty = (v: unknown) => typeof v === 'string' && v.trim().length > 0;
 			const safeParse = (v: unknown): unknown => {
 				if (typeof v !== 'string') return v;
@@ -116,15 +107,12 @@
 				});
 			};
 
-			// Normalize to array (supports single object or array)
 			const list: unknown[] = Array.isArray(data)
 				? data
 				: (data && typeof data === 'object' ? [data] : []);
-
 			console.log('Normalized list length:', list.length);
 
 			const newEntries: ResearchEntry[] = [];
-
 			list.forEach((item, idx) => {
 				console.log(`Item[${idx}]`, item);
 				if (!item || typeof item !== 'object' || Array.isArray(item)) return;
@@ -137,14 +125,12 @@
 					return;
 				}
 
-				// Category-bucket style: e.g., { Instagram: "{}", RSS: "{\"error\":\"...\"}" }
 				for (const [categoryKey, rawVal] of Object.entries(rec)) {
 					const category = categoryKey.toString();
 					let v = peel(rawVal);
 
-					// v can be object, array, or primitive
 					if (Array.isArray(v)) {
-						v.forEach((child, j) => {
+						v.forEach((child) => {
 							const obj = peel(child);
 							if (obj && typeof obj === 'object' && !Array.isArray(obj)) {
 								pushIfValid(newEntries, obj as Record<string, unknown>, category);
@@ -204,35 +190,44 @@
     <p class="subtitle">Powered by N8N Intelligence</p>
   </header>
 
-  <nav class="tabs">
-    <button 
-      class="tab" 
+  <nav class="tabs" role="tablist" aria-label="Research navigation">
+    <button
+      id="tab-research"
+      class="tab"
       class:active={activeTab === 'research'}
+      role="tab"
+      aria-selected={activeTab === 'research'}
+      aria-controls="panel-research"
       on:click={() => activeTab = 'research'}
     >
       Research Form
     </button>
-    <button 
-      class="tab" 
+
+    <button
+      id="tab-summaries"
+      class="tab"
       class:active={activeTab === 'summaries'}
+      role="tab"
+      aria-selected={activeTab === 'summaries'}
+      aria-controls="panel-summaries"
       on:click={() => activeTab = 'summaries'}
     >
       Research Summaries
       {#if summaries.length > 0}
-        <span class="badge">{summaries.length}</span>
+        <span class="badge" aria-label="Number of summaries">{summaries.length}</span>
       {/if}
     </button>
   </nav>
 
   <div class="content">
     {#if activeTab === 'research'}
-      <div class="research-section">
+      <section id="panel-research" role="tabpanel" aria-labelledby="tab-research" class="research-section">
         <div class="form-card">
           <h2>Company Research Request</h2>
-          
+
           {#if error}
-            <div class="alert error">
-              <svg class="alert-icon" viewBox="0 0 20 20" fill="currentColor">
+            <div class="alert error" role="alert">
+              <svg class="alert-icon" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
                 <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clip-rule="evenodd" />
               </svg>
               {error}
@@ -242,9 +237,9 @@
           <form on:submit|preventDefault={submitResearch} class="form">
             <div class="form-group">
               <label for="companyName" class="label">Company Name *</label>
-              <input 
+              <input
                 id="companyName"
-                type="text" 
+                type="text"
                 bind:value={formData.companyName}
                 placeholder="Enter company name"
                 class="input"
@@ -255,7 +250,7 @@
 
             <div class="form-group">
               <label for="companyWebsite" class="label">Company Website *</label>
-              <input 
+              <input
                 id="companyWebsite"
                 type="url"
                 bind:value={formData.companyWebsite}
@@ -272,7 +267,7 @@
               disabled={isLoading || !formData.companyName.trim() || !formData.companyWebsite.trim()}
             >
               {#if isLoading}
-                <svg class="spinner" viewBox="0 0 24 24">
+                <svg class="spinner" viewBox="0 0 24 24" aria-hidden="true">
                   <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none"/>
                   <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"/>
                 </svg>
@@ -283,9 +278,9 @@
             </button>
           </form>
         </div>
-      </div>
+      </section>
     {:else if activeTab === 'summaries'}
-      <div class="summaries-section">
+      <section id="panel-summaries" role="tabpanel" aria-labelledby="tab-summaries" class="summaries-section">
         <div class="summaries-header">
           <h2>Research Summaries</h2>
           {#if summaries.length > 0}
@@ -297,7 +292,7 @@
 
         {#if summaries.length === 0}
           <div class="empty-state">
-            <svg class="empty-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg class="empty-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
             </svg>
             <h3>No research summaries yet</h3>
@@ -306,38 +301,54 @@
         {:else}
           <div class="summaries-list">
             {#each summaries as entry (entry.id)}
-              <div class="summary-card">
+              <article class="summary-card">
                 <div class="summary-meta">
                   <span class="category-badge">{entry.category}</span>
                   {#if entry.postedDate}
-                    <span class="date-badge">{entry.postedDate}</span>
+                    <span class="date-badge" title="Published date">{entry.postedDate}</span>
                   {/if}
                 </div>
 
                 <div class="summary-content">
-                  <a class="summary-link" href={entry.url} target="_blank" rel="noopener noreferrer">
+                  <a class="summary-link" href={entry.url} target="_blank" rel="noopener noreferrer nofollow">
                     {entry.title}
                   </a>
                   <div class="summary-text">
                     {@html (entry.summary || '').replace(/\n/g, '<br>')}
                   </div>
                 </div>
-              </div>
+              </article>
             {/each}
           </div>
         {/if}
-      </div>
+      </section>
     {/if}
   </div>
 </main>
 
 <style>
+  :root {
+    --bg: #ffffff;
+    --text: #111827;
+    --muted: #6b7280;
+    --primary: #667eea;
+    --primary-2: #764ba2;
+    --card: #ffffff;
+    --card-muted: #f9fafb;
+    --border: #e5e7eb;
+    --border-strong: #d1d5db;
+    --danger: #ef4444;
+    --danger-2: #dc2626;
+  }
+
   :global(body) {
     margin: 0;
     padding: 0;
     background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
     min-height: 100vh;
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    color-scheme: light;
+    color: var(--text);
   }
 
   .container {
@@ -350,7 +361,7 @@
   .header {
     text-align: center;
     margin-bottom: 3rem;
-    color: white;
+    color: #ffffff;
   }
 
   .title {
@@ -363,15 +374,15 @@
   .subtitle {
     font-size: 1.25rem;
     margin: 0.5rem 0 0 0;
-    opacity: 0.9;
-    font-weight: 400;
+    opacity: 0.95;
+    font-weight: 500;
   }
 
   .tabs {
     display: flex;
     gap: 0.5rem;
     margin-bottom: 2rem;
-    background: rgba(255,255,255,0.1);
+    background: rgba(255,255,255,0.12);
     border-radius: 12px;
     padding: 0.5rem;
     backdrop-filter: blur(10px);
@@ -381,49 +392,52 @@
     flex: 1;
     background: transparent;
     border: none;
-    color: white;
+    color: #ffffff;
     padding: 1rem 2rem;
     border-radius: 8px;
     font-size: 1rem;
-    font-weight: 500;
+    font-weight: 600;
     cursor: pointer;
-    transition: all 0.3s ease;
+    transition: all 0.2s ease;
     display: flex;
     align-items: center;
     justify-content: center;
     gap: 0.5rem;
+    outline: none;
   }
 
   .tab:hover {
-    background: rgba(255,255,255,0.1);
+    background: rgba(255,255,255,0.18);
+  }
+
+  .tab:focus-visible {
+    box-shadow: 0 0 0 3px rgba(255,255,255,0.6);
   }
 
   .tab.active {
-    background: white;
-    color: #667eea;
+    background: #ffffff;
+    color: var(--primary);
     box-shadow: 0 4px 12px rgba(0,0,0,0.1);
   }
 
   .badge {
-    background: #667eea;
-    color: white;
-    border-radius: 50%;
-    width: 24px;
+    background: var(--primary);
+    color: #ffffff;
+    border-radius: 9999px;
+    min-width: 24px;
     height: 24px;
-    display: flex;
+    padding: 0 8px;
+    display: inline-flex;
     align-items: center;
     justify-content: center;
     font-size: 0.75rem;
-    font-weight: 600;
-  }
-
-  .tab.active .badge {
-    background: #667eea;
-    color: white;
+    font-weight: 700;
+    line-height: 1;
   }
 
   .content {
-    background: white;
+    background: var(--card);
+    color: var(--text);
     border-radius: 16px;
     box-shadow: 0 20px 40px rgba(0,0,0,0.1);
     overflow: hidden;
@@ -452,7 +466,7 @@
 
   .alert.error {
     background: #fef2f2;
-    color: #dc2626;
+    color: var(--danger-2);
     border: 1px solid #fecaca;
   }
 
@@ -473,47 +487,51 @@
 
   .label {
     display: block;
-    font-weight: 500;
+    font-weight: 600;
     color: #374151;
     margin-bottom: 0.5rem;
-    font-size: 0.875rem;
+    font-size: 0.9rem;
   }
 
   .input {
     width: 100%;
     padding: 0.875rem 1rem;
-    border: 2px solid #e5e7eb;
+    border: 2px solid var(--border);
     border-radius: 8px;
     font-size: 1rem;
     transition: all 0.2s ease;
-    background: white;
-    color: #000;
+    background: #ffffff;
+    color: #111827;
+  }
+
+  .input::placeholder {
+    color: #9ca3af;
   }
 
   .input:focus {
     outline: none;
-    border-color: #667eea;
-    box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+    border-color: var(--primary);
+    box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.15);
   }
 
   .input:disabled {
-    background: #f9fafb;
-    opacity: 0.6;
+    background: #f3f4f6;
+    opacity: 0.75;
     cursor: not-allowed;
-    color: #000;
+    color: #111827;
   }
 
   .submit-btn {
     width: 100%;
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    color: white;
+    background: linear-gradient(135deg, var(--primary) 0%, var(--primary-2) 100%);
+    color: #ffffff;
     border: none;
     padding: 1rem 2rem;
     border-radius: 8px;
     font-size: 1rem;
-    font-weight: 600;
+    font-weight: 700;
     cursor: pointer;
-    transition: all 0.3s ease;
+    transition: all 0.2s ease;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -527,9 +545,15 @@
   }
 
   .submit-btn:disabled {
-    opacity: 0.7;
+    opacity: 0.75;
     cursor: not-allowed;
     transform: none;
+    box-shadow: none;
+  }
+
+  .submit-btn:focus-visible {
+    outline: 3px solid rgba(102, 126, 234, 0.4);
+    outline-offset: 2px;
   }
 
   .spinner {
@@ -562,37 +586,43 @@
   }
 
   .clear-btn {
-    background: #ef4444;
-    color: white;
+    background: var(--danger);
+    color: #ffffff;
     border: none;
     padding: 0.5rem 1rem;
     border-radius: 6px;
-    font-size: 0.875rem;
-    font-weight: 500;
+    font-size: 0.9rem;
+    font-weight: 600;
     cursor: pointer;
-    transition: background 0.2s ease;
+    transition: background 0.15s ease, transform 0.15s ease;
   }
 
   .clear-btn:hover {
-    background: #dc2626;
+    background: var(--danger-2);
+    transform: translateY(-1px);
+  }
+
+  .clear-btn:focus-visible {
+    outline: 3px solid rgba(239, 68, 68, 0.35);
+    outline-offset: 2px;
   }
 
   .empty-state {
     text-align: center;
     padding: 4rem 2rem;
-    color: #6b7280;
+    color: var(--muted);
   }
 
   .empty-icon {
     width: 64px;
     height: 64px;
     margin: 0 auto 1rem;
-    opacity: 0.5;
+    opacity: 0.6;
   }
 
   .empty-state h3 {
     font-size: 1.25rem;
-    font-weight: 600;
+    font-weight: 700;
     margin: 0 0 0.5rem 0;
     color: #374151;
   }
@@ -603,22 +633,22 @@
   }
 
   .summaries-list {
-    display: flex,;
+    display: flex;
     flex-direction: column;
     gap: 1.5rem;
   }
 
   .summary-card {
-    background: #f9fafb;
-    border: 1px solid #e5e7eb;
+    background: var(--card-muted);
+    border: 1px solid var(--border);
     border-radius: 12px;
     padding: 1.5rem;
     transition: all 0.2s ease;
   }
 
   .summary-card:hover {
-    box-shadow: 0 4px 12px rgba(0,0,0,0.05);
-    border-color: #d1d5db;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.06);
+    border-color: var(--border-strong);
   }
 
   .summary-meta {
@@ -632,11 +662,22 @@
     border-radius: 9999px;
     padding: 0.125rem 0.5rem;
     font-size: 0.75rem;
+    font-weight: 700;
+  }
+
+  .date-badge {
+    display: inline-block;
+    background: #eef2ff;
+    color: #374151;
+    border-radius: 9999px;
+    padding: 0.125rem 0.5rem;
+    font-size: 0.75rem;
     font-weight: 600;
+    margin-left: 0.5rem;
   }
 
   .summary-content {
-    color: #4b5563;
+    color: #374151;
     line-height: 1.6;
     font-size: 0.95rem;
   }
@@ -644,7 +685,7 @@
   .summary-link {
     display: inline-block;
     color: #1d4ed8;
-    font-weight: 600;
+    font-weight: 700;
     text-decoration: none;
     margin-bottom: 0.25rem;
   }
@@ -655,6 +696,7 @@
 
   .summary-text {
     margin-top: 0.25rem;
+    color: #4b5563;
   }
 
   @media (max-width: 768px) {
@@ -668,7 +710,7 @@
 
     .research-section,
     .summaries-section {
-      padding: 2rem 1.5rem;
+      padding: 2rem 1.25rem;
     }
 
     .tabs {
@@ -683,17 +725,6 @@
       flex-direction: column;
       align-items: flex-start;
       gap: 1rem;
-    }
-
-    .date-badge {
-      display: inline-block;
-      background: #f3f4f6;
-      color: #374151;
-      border-radius: 9999px;
-      padding: 0.125rem 0.5rem;
-      font-size: 0.75rem;
-      font-weight: 600;
-      margin-left: 0.5rem;
     }
   }
 </style>
