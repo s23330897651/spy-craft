@@ -1,8 +1,10 @@
 <script lang="ts">
+
 	interface CompanyData {
 		companyName: string;
 		companyWebsite: string;
 	}
+
 	interface ResearchEntry {
 		id: string;
 		companyName: string;
@@ -13,12 +15,24 @@
 		postedDate?: string;
 	}
 
+	interface Debrief {
+		title: string;
+		fullBody?: string;
+		bulletPoints?: string[];
+		totals?: Record<string, number>;
+		bulletPointCount?: number;
+	}
+
 	let activeTab: 'research' | 'summaries' = 'research';
+
 	let formData: CompanyData = {
 		companyName: '',
 		companyWebsite: ''
 	};
+
 	let summaries: ResearchEntry[] = [];
+	let debrief: Debrief | null = null;
+
 	let isLoading = false;
 	let error = '';
 
@@ -26,38 +40,54 @@
 	const webhookUrl = 'https://n8n.intelligentresourcing.co/webhook/d95c8e70-5cb1-4323-838b-8a910fbecf65';
 
 	let __uid = 0;
+
 	function makeId(suffix: string): string {
 		__uid++;
 		return `${Date.now()}-${__uid}-${suffix}`;
 	}
-  function formatDate(value?: string): string {
-    if (!value) return '';
-    const trimmed = value.trim();
-    const parsed = Date.parse(trimmed);
-    if (!Number.isNaN(parsed)) {
-      const d = new Date(parsed);
-      return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
-    }
-    const tIdx = trimmed.indexOf('T');
-    if (tIdx > 0) return trimmed.slice(0, tIdx);
-    const spaceIdx = trimmed.indexOf(' ');
-    if (spaceIdx > 0) return trimmed.slice(0, spaceIdx);
-    return trimmed;
-  }
+
+	function formatDate(value?: string): string {
+		if (!value) return '';
+		const trimmed = value.trim();
+	 const parsed = Date.parse(trimmed);
+		if (!Number.isNaN(parsed)) {
+			const d = new Date(parsed);
+			return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+		}
+		const tIdx = trimmed.indexOf('T');
+		if (tIdx > 0) return trimmed.slice(0, tIdx);
+		const spaceIdx = trimmed.indexOf(' ');
+		if (spaceIdx > 0) return trimmed.slice(0, spaceIdx);
+		return trimmed;
+	}
+
+	function normalizeBulletPoint(text: string): string {
+		// Remove accidental leading/trailing bold markers and whitespace
+		return text.replace(/^\s*\*\*\s*/, '').replace(/\s*\*\*\s*$/, '').trim();
+	}
+
+	function prettyKey(key: string): string {
+		if (!key) return key;
+		return key.charAt(0).toUpperCase() + key.slice(1);
+	}
 
 	async function submitResearch() {
 		if (!formData.companyName.trim() || !formData.companyWebsite.trim()) {
 			error = 'Company name and website are required';
 			return;
 		}
+
 		isLoading = true;
 		error = '';
+
 		try {
 			const payload = {
 				companyName: formData.companyName,
 				companyWebsite: formData.companyWebsite
 			};
+
 			console.log('Submitting research to webhook:', webhookUrl, payload);
+
 			const response = await fetch(webhookUrl, {
 				method: 'POST',
 				mode: 'cors',
@@ -68,13 +98,17 @@
 				},
 				body: JSON.stringify(payload)
 			});
+
 			console.log('Webhook response status:', response.status, response.statusText);
+
 			const rawText = await response.text();
 			console.log('Webhook raw body length:', rawText.length);
 			console.log('Webhook raw body (preview 1k):', rawText.slice(0, 1000));
+
 			if (!response.ok) {
 				throw new Error(`HTTP ${response.status} ${response.statusText}${rawText ? ` - ${rawText}` : ''}`);
 			}
+
 			let data: unknown = null;
 			try {
 				data = JSON.parse(rawText);
@@ -98,6 +132,7 @@
 				}
 				return cur;
 			};
+
 			const pushIfValid = (bucket: ResearchEntry[], obj: Record<string, unknown>, categoryHint?: string) => {
 				const err = typeof obj.error === 'string' ? obj.error : '';
 				const title = typeof obj.title === 'string' ? obj.title : '';
@@ -121,19 +156,44 @@
 				});
 			};
 
-			const list: unknown[] = Array.isArray(data)
+			// Normalize to list and extract debrief first if present
+			const baseList: unknown[] = Array.isArray(data)
 				? data
 				: (data && typeof data === 'object' ? [data] : []);
-			console.log('Normalized list length:', list.length);
+
+			console.log('Normalized list length:', baseList.length);
+
+			let remainingList: unknown[] = baseList;
+			// First element is always a debrief now
+			if (baseList.length > 0) {
+				const first = peel(baseList[0]);
+				if (first && typeof first === 'object' && !Array.isArray(first)) {
+					const rec = first as Record<string, unknown>;
+					// Heuristic: presence of fullBody or bulletPoints marks a debrief
+					if ('fullBody' in rec || 'bulletPoints' in rec) {
+						const d: Debrief = {
+							title: typeof rec.title === 'string' ? rec.title : 'Content Debrief',
+							fullBody: typeof rec.fullBody === 'string' ? rec.fullBody : undefined,
+							bulletPoints: Array.isArray(rec.bulletPoints) ? rec.bulletPoints.filter((s: unknown) => typeof s === 'string' && s.trim().length > 0) as string[] : undefined,
+							totals: (rec.totals && typeof rec.totals === 'object') ? rec.totals as Record<string, number> : undefined,
+							bulletPointCount: typeof rec.bulletPointCount === 'number' ? rec.bulletPointCount : undefined
+						};
+						debrief = d;
+						remainingList = baseList.slice(1);
+						console.log('Debrief extracted:', d.title);
+					}
+				}
+			}
 
 			const newEntries: ResearchEntry[] = [];
-			list.forEach((item, idx) => {
+
+			remainingList.forEach((item, idx) => {
 				console.log(`Item[${idx}]`, item);
 				if (!item || typeof item !== 'object' || Array.isArray(item)) return;
 
 				const rec = item as Record<string, unknown>;
-				const hasDirectShape = ('title' in rec) || ('summary' in rec) || ('url' in rec) || ('category' in rec) || ('postedDate' in rec);
 
+				const hasDirectShape = ('title' in rec) || ('summary' in rec) || ('url' in rec) || ('category' in rec) || ('postedDate' in rec);
 				if (hasDirectShape) {
 					pushIfValid(newEntries, rec);
 					return;
@@ -158,12 +218,22 @@
 				}
 			});
 
-			console.log('Mapped entries count:', newEntries.length);
-			if (newEntries.length > 0) {
-				console.table(newEntries.map(e => ({ category: e.category, title: e.title, url: e.url, postedDate: e.postedDate || '' })));
+			// Deduplicate by URL (keep first occurrence)
+			const seen = new Set<string>();
+			const deduped = newEntries.filter((e) => {
+				const key = (e.url || '').trim().toLowerCase();
+				if (!key) return true;
+				if (seen.has(key)) return false;
+				seen.add(key);
+				return true;
+			});
+
+			console.log('Mapped entries count (deduped):', deduped.length);
+			if (deduped.length > 0) {
+				console.table(deduped.map(e => ({ category: e.category, title: e.title, url: e.url, postedDate: e.postedDate || '' })));
 			}
 
-			if (newEntries.length === 0) {
+			if (deduped.length === 0 && !debrief) {
 				const placeholder: ResearchEntry = {
 					id: makeId('no-results'),
 					companyName: formData.companyName,
@@ -174,8 +244,9 @@
 				};
 				summaries = [placeholder, ...summaries];
 			} else {
-				summaries = [...newEntries, ...summaries];
+				summaries = [...deduped, ...summaries];
 			}
+
 			console.log('Summaries after update (length):', summaries.length);
 
 			formData = {
@@ -184,6 +255,7 @@
 			};
 			activeTab = 'summaries';
 			console.log('Switched to tab:', activeTab);
+
 		} catch (err) {
 			console.error('Error submitting research:', err);
 			const message = err instanceof Error ? err.message : 'Failed to submit research request';
@@ -195,7 +267,9 @@
 
 	function clearSummaries() {
 		summaries = [];
+		debrief = null;
 	}
+
 </script>
 
 <main class="container">
@@ -240,7 +314,7 @@
           <h2>Company Research Request</h2>
 
           {#if error}
-            <div class="alert error" role="alert">
+            <div class="alert error" role="alert" aria-live="polite">
               <svg class="alert-icon" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
                 <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clip-rule="evenodd" />
               </svg>
@@ -293,18 +367,19 @@
           </form>
         </div>
       </section>
+
     {:else if activeTab === 'summaries'}
       <section id="panel-summaries" role="tabpanel" aria-labelledby="tab-summaries" class="summaries-section">
         <div class="summaries-header">
-          <h2>Research Summaries</h2>
-          {#if summaries.length > 0}
+          <h2>{debrief ? 'Sources' : 'Research Summaries'}</h2>
+          {#if summaries.length > 0 || debrief}
             <button class="clear-btn" on:click={clearSummaries}>
               Clear All
             </button>
           {/if}
         </div>
 
-        {#if summaries.length === 0}
+        {#if !debrief && summaries.length === 0}
           <div class="empty-state">
             <svg class="empty-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
@@ -314,6 +389,49 @@
           </div>
         {:else}
           <div class="summaries-list">
+            {#if debrief}
+              <article class="debrief-card">
+                <div class="debrief-header">
+                  <span class="debrief-badge">Debrief</span>
+                  <h3 class="debrief-title">{debrief.title || 'Content Debrief'}</h3>
+                </div>
+
+                {#if debrief.bulletPoints && debrief.bulletPoints.length > 0}
+                  <ul class="debrief-list">
+                    {#each debrief.bulletPoints as bp}
+                      <li><strong>{normalizeBulletPoint(bp)}</strong></li>
+                    {/each}
+                  </ul>
+                {:else if debrief.fullBody}
+                  <div class="debrief-body">
+                    {#each debrief.fullBody.split('\n') as line}
+                      {#if line.trim().startsWith('- ')}
+                        <div class="debrief-line"><span>•</span> <strong>{line.trim().slice(2)}</strong></div>
+                      {:else if line.trim().length === 0}
+                        <div class="debrief-spacer"></div>
+                      {:else}
+                        <div class="debrief-text">{line}</div>
+                      {/if}
+                    {/each}
+                  </div>
+                {/if}
+
+                {#if debrief.totals}
+                  <div class="debrief-totals">
+                    {#if 'uncategorised' in debrief.totals}
+                      <span>Totals: {prettyKey('uncategorised')}: {debrief.totals['uncategorised']}</span>
+                      <span class="divider">|</span>
+                    {/if}
+                    {#if 'overall' in debrief.totals}
+                      <span>Overall: {debrief.totals['overall']}</span>
+                    {/if}
+                  </div>
+                {/if}
+              </article>
+
+              <div class="section-divider" aria-hidden="true"></div>
+            {/if}
+
             {#each summaries as entry (entry.id)}
               <article class="summary-card">
                 <div class="summary-meta">
@@ -324,9 +442,14 @@
                 </div>
 
                 <div class="summary-content">
-                  <a class="summary-link" href={entry.url} target="_blank" rel="noopener noreferrer nofollow">
-                    {entry.title}
-                  </a>
+                  {#if entry.url && entry.url !== '#'}
+                    <a class="summary-link" href={entry.url} target="_blank" rel="noopener noreferrer nofollow">
+                      {entry.title}
+                    </a>
+                  {:else}
+                    <div class="summary-link disabled">{entry.title}</div>
+                  {/if}
+
                   <div class="summary-text">
                     {@html (entry.summary || '').replace(/\n/g, '<br>')}
                   </div>
@@ -652,6 +775,85 @@
     gap: 1.5rem;
   }
 
+  .debrief-card {
+    background: #ffffff;
+    border: 2px solid var(--border);
+    border-radius: 14px;
+    padding: 1.5rem;
+    box-shadow: 0 8px 20px rgba(0,0,0,0.06);
+  }
+
+  .debrief-header {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    margin-bottom: 0.75rem;
+  }
+
+  .debrief-badge {
+    display: inline-block;
+    background: #e0e7ff;
+    color: #3730a3;
+    border-radius: 9999px;
+    padding: 0.125rem 0.5rem;
+    font-size: 0.75rem;
+    font-weight: 700;
+  }
+
+  .debrief-title {
+    margin: 0;
+    font-size: 1.25rem;
+    color: #111827;
+    font-weight: 700;
+  }
+
+  .debrief-list {
+    margin: 0.5rem 0 0 0;
+    padding-left: 1.25rem;
+    color: #374151;
+  }
+
+  .debrief-list li {
+    margin: 0.4rem 0;
+    line-height: 1.5;
+  }
+
+  .debrief-body {
+    color: #374151;
+    line-height: 1.6;
+  }
+
+  .debrief-line {
+    display: flex;
+    gap: 0.5rem;
+    margin: 0.35rem 0;
+  }
+
+  .debrief-text {
+    margin: 0.35rem 0;
+  }
+
+  .debrief-spacer {
+    height: 0.5rem;
+  }
+
+  .debrief-totals {
+    margin-top: 0.75rem;
+    color: #4b5563;
+    font-weight: 600;
+  }
+
+  .debrief-totals .divider {
+    margin: 0 0.5rem;
+    color: #9ca3af;
+  }
+
+  .section-divider {
+    height: 1px;
+    background: var(--border);
+    margin: 0.5rem 0 0.25rem 0;
+  }
+
   .summary-card {
     background: var(--card-muted);
     border: 1px solid var(--border);
@@ -704,6 +906,12 @@
     margin-bottom: 0.25rem;
   }
 
+  .summary-link.disabled {
+    color: #374151;
+    font-weight: 700;
+    margin-bottom: 0.25rem;
+  }
+
   .summary-link:hover {
     text-decoration: underline;
   }
@@ -717,24 +925,19 @@
     .container {
       padding: 1rem;
     }
-
     .title {
       font-size: 2rem;
     }
-
     .research-section,
     .summaries-section {
       padding: 2rem 1.25rem;
     }
-
     .tabs {
       flex-direction: column;
     }
-
     .tab {
       padding: 0.875rem;
     }
-
     .summaries-header {
       flex-direction: column;
       align-items: flex-start;
