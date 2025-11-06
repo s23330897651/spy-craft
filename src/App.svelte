@@ -62,6 +62,7 @@
 		return trimmed;
 	}
 
+	const hasText = (s?: unknown) => typeof s === 'string' && s.trim().length > 0;
 	const stripBold = (s: string) => s.replace(/^\s*\*\*\s*|\s*\*\*\s*$/g, '');
 	const normalizePoint = (s: string) => stripBold(s.replace(/^\s*-\s*/, '').trim());
 
@@ -69,8 +70,8 @@
 		if (!fullBody) return [];
 		return fullBody
 			.split('\n')
-			.filter((l) => l.trim().startsWith('- '))
-			.map(normalizePoint)
+			.filter((l) => l.trim().startsWith('- ') || l.trim().startsWith('• '))
+			.map((l) => normalizePoint(l.replace(/^•\s*/, '')))
 			.filter((t) => t.length > 0);
 	}
 
@@ -79,12 +80,12 @@
 		const paras = fullBody
 			.split('\n')
 			.map((l) => l.trim())
-			.filter((l) => l.length > 0 && !l.startsWith('#') && !l.startsWith('- '));
+			.filter((l) => l.length > 0 && !l.startsWith('#') && !l.startsWith('- ') && !l.startsWith('• '));
 		return paras.length ? paras.join(' ') : undefined;
 	}
 
 	function deriveExecutiveSummary(existing?: string, bullets?: string[], fullBody?: string): string | undefined {
-		if (existing && existing.trim()) return existing.trim();
+		if (hasText(existing)) return (existing as string).trim();
 		const fromBody = extractParagraphFromFullBody(fullBody);
 		if (fromBody) return fromBody;
 		if (bullets && bullets.length) {
@@ -128,7 +129,6 @@
 			});
 
 			const rawText = await response.text();
-
 			if (!response.ok) {
 				throw new Error(`HTTP ${response.status} ${response.statusText}${rawText ? ` - ${rawText}` : ''}`);
 			}
@@ -136,11 +136,8 @@
 			let data: unknown = null;
 			try {
 				data = JSON.parse(rawText);
-			} catch {
-				// non-JSON response
-			}
+			} catch {}
 
-			const isNonEmpty = (v: unknown) => typeof v === 'string' && v.trim().length > 0;
 			const safeParse = (v: unknown): unknown => {
 				if (typeof v !== 'string') return v;
 				try { return JSON.parse(v); } catch { return v; }
@@ -157,7 +154,6 @@
 				return cur;
 			};
 
-			// STRICT source inclusion: require non-empty summary (skip title-only)
 			const pushIfValid = (bucket: ResearchEntry[], obj: Record<string, unknown>, categoryHint?: string) => {
 				const title = typeof obj.title === 'string' ? obj.title : '';
 				const summary = typeof obj.summary === 'string' ? obj.summary : '';
@@ -165,29 +161,25 @@
 				const category = typeof obj.category === 'string' ? obj.category : (categoryHint || 'Research');
 				const postedDate = typeof obj.postedDate === 'string' ? obj.postedDate : '';
 
-				if (!isNonEmpty(summary)) return;
+				if (!hasText(summary)) return;
 
 				bucket.push({
 					id: makeId(category || 'item'),
 					companyName: payload.companyName,
 					category: category || 'Research',
-					title: title || 'Untitled',
-					summary,
-					url: isNonEmpty(url) ? url : '#',
-					postedDate: postedDate || undefined
+					title: hasText(title) ? title : 'Untitled',
+					summary: summary,
+					url: hasText(url) ? url : '#',
+					postedDate: hasText(postedDate) ? postedDate : undefined
 				});
 			};
 
-			// Normalize to list
 			const baseList: unknown[] = Array.isArray(data)
 				? data
 				: (data && typeof data === 'object' ? [data] : []);
 
 			let remainingList: unknown[] = baseList;
 
-			// Extract Debrief from first element. Supports:
-			// - { title, fullBody, bulletPoints, totals }
-			// - { title, executive_summary, supporting_points, totals }
 			if (baseList.length > 0) {
 				const first = peel(baseList[0]);
 				if (first && typeof first === 'object' && !Array.isArray(first)) {
@@ -249,7 +241,6 @@
 				}
 			});
 
-			// Deduplicate by URL
 			const seen = new Set<string>();
 			const deduped = newEntries.filter((e) => {
 				const key = (e.url || '').trim().toLowerCase();
@@ -426,11 +417,11 @@
                 <section class="debrief-exec" aria-labelledby="exec-summary-title">
                   <h5 id="exec-summary-title" class="debrief-section-title">Executive Summary</h5>
 
-                  {#if debrief.executiveSummary}
-                    <p class="debrief-paragraph">{debrief.executiveSummary}</p>
+                  {#if hasText(debrief?.executiveSummary)}
+                    <p class="debrief-paragraph">{debrief?.executiveSummary}</p>
                   {/if}
 
-                  {#if debrief.bulletPoints && debrief.bulletPoints.length}
+                  {#if debrief?.bulletPoints && debrief.bulletPoints.length}
                     <ul class="debrief-bullets">
                       {#each debrief.bulletPoints as bp}
                         <li><strong>{bp}</strong></li>
@@ -439,7 +430,7 @@
                   {/if}
                 </section>
 
-                {#if debrief.totals}
+                {#if debrief?.totals}
                   <footer class="debrief-totals">
                     {#if 'uncategorised' in debrief.totals}
                       <span>Totals: Uncategorised: {debrief.totals['uncategorised']}</span>
@@ -488,7 +479,6 @@
 
 <style>
   :root {
-    /* Orangy theme */
     --bg: #31160a;
     --bg-2: #5a2a12;
     --text: #0b1b2b;
@@ -596,7 +586,6 @@
 
   .summaries-list { display: flex; flex-direction: column; gap: 1.25rem; }
 
-  /* Debrief card */
   .debrief-card {
     background: #ffffff; border: 1px solid var(--border); border-radius: 14px;
     padding: 1.25rem 1.25rem 1rem 1.25rem; box-shadow: 0 10px 24px rgba(0,0,0,0.06);
