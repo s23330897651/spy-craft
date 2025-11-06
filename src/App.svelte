@@ -37,7 +37,6 @@
 	let isLoading = false;
 	let error = '';
 
-	// Use your n8n production URL (workflow is active)
 	const webhookUrl = 'https://n8n.intelligentresourcing.co/webhook/d95c8e70-5cb1-4323-838b-8a910fbecf65';
 
 	let __uid = 0;
@@ -137,29 +136,29 @@
 				return cur;
 			};
 
+			// STRICT source inclusion: require non-empty summary (skip title-only)
 			const pushIfValid = (bucket: ResearchEntry[], obj: Record<string, unknown>, categoryHint?: string) => {
-				const err = typeof obj.error === 'string' ? obj.error : '';
 				const title = typeof obj.title === 'string' ? obj.title : '';
 				const summary = typeof obj.summary === 'string' ? obj.summary : '';
 				const url = typeof obj.url === 'string' ? obj.url : '';
 				const category = typeof obj.category === 'string' ? obj.category : (categoryHint || 'Research');
 				const postedDate = typeof obj.postedDate === 'string' ? obj.postedDate : '';
 
-				if (isNonEmpty(err) && !isNonEmpty(title) && !isNonEmpty(summary) && !isNonEmpty(url)) return;
-				if (!isNonEmpty(title) && !isNonEmpty(summary) && !isNonEmpty(url)) return;
+				// Skip if summary missing/empty
+				if (!isNonEmpty(summary)) return;
 
 				bucket.push({
 					id: makeId(category || 'item'),
 					companyName: payload.companyName,
 					category: category || 'Research',
-					title: title || (isNonEmpty(err) ? `${category} Error` : ''),
-					summary: summary || err || '',
+					title: title || 'Untitled',
+					summary,
 					url: isNonEmpty(url) ? url : '#',
 					postedDate: postedDate || undefined
 				});
 			};
 
-			// Normalize to list and extract debrief first (fullBody/bulletPoints format)
+			// Normalize to list and extract debrief first (title + fullBody + bulletPoints)
 			const baseList: unknown[] = Array.isArray(data)
 				? data
 				: (data && typeof data === 'object' ? [data] : []);
@@ -170,11 +169,13 @@
 				const first = peel(baseList[0]);
 				if (first && typeof first === 'object' && !Array.isArray(first)) {
 					const rec = first as Record<string, unknown>;
-					if ('fullBody' in rec || 'bulletPoints' in rec || 'title' in rec) {
+					if ('title' in rec || 'fullBody' in rec || 'bulletPoints' in rec) {
 						debrief = {
 							title: typeof rec.title === 'string' ? rec.title : 'Content Debrief',
 							fullBody: typeof rec.fullBody === 'string' ? rec.fullBody : undefined,
-							bulletPoints: Array.isArray(rec.bulletPoints) ? (rec.bulletPoints as unknown[]).filter((s) => typeof s === 'string' && s.trim().length > 0) as string[] : undefined,
+							bulletPoints: Array.isArray(rec.bulletPoints)
+								? (rec.bulletPoints as unknown[]).filter((s) => typeof s === 'string' && s.trim().length > 0) as string[]
+								: undefined,
 							totals: (rec.totals && typeof rec.totals === 'object') ? rec.totals as Record<string, number> : undefined,
 							bulletPointCount: typeof rec.bulletPointCount === 'number' ? rec.bulletPointCount : undefined
 						};
@@ -383,24 +384,17 @@
                   <div class="debrief-rule" aria-hidden="true"></div>
                 </header>
 
-                <h3 class="debrief-company">{getDisplayCompany()}</h3>
+                <h3 class="debrief-title">{debrief.title}</h3>
+                <h4 class="debrief-company">{getDisplayCompany()}</h4>
 
-                {#if debrief.bulletPoints && debrief.bulletPoints.length > 0}
-                  <section aria-labelledby="exec-summary-title">
-                    <h4 id="exec-summary-title" class="debrief-section-title">Executive Summary</h4>
-                    <ul class="debrief-bullets">
-                      {#each debrief.bulletPoints as bp}
-                        <li><strong>{normalizeBulletPoint(bp)}</strong></li>
-                      {/each}
-                    </ul>
-                  </section>
-                {:else if debrief.fullBody}
-                  <section aria-labelledby="exec-summary-title">
-                    <h4 id="exec-summary-title" class="debrief-section-title">Executive Summary</h4>
+                <section class="debrief-exec" aria-labelledby="exec-summary-title">
+                  <h5 id="exec-summary-title" class="debrief-section-title">Executive Summary</h5>
+
+                  {#if debrief.fullBody}
                     <div class="debrief-body">
                       {#each debrief.fullBody.split('\n') as line}
                         {#if line.trim().startsWith('- ')}
-                          <div class="debrief-line"><span class="dot">•</span> <strong>{line.trim().slice(2)}</strong></div>
+                          <!-- ignore list lines here to avoid duplicating with bulletPoints -->
                         {:else if /^#{1,4}\s/.test(line)}
                           <div class="debrief-h">{line.replace(/^#+\s/, '')}</div>
                         {:else if line.trim().length === 0}
@@ -410,8 +404,16 @@
                         {/if}
                       {/each}
                     </div>
-                  </section>
-                {/if}
+                  {/if}
+
+                  {#if debrief.bulletPoints && debrief.bulletPoints.length > 0}
+                    <ul class="debrief-bullets">
+                      {#each debrief.bulletPoints as bp}
+                        <li><strong>{normalizeBulletPoint(bp)}</strong></li>
+                      {/each}
+                    </ul>
+                  {/if}
+                </section>
 
                 {#if debrief.totals}
                   <footer class="debrief-totals">
@@ -462,7 +464,6 @@
 
 <style>
   :root {
-    /* Orangy theme */
     --bg: #31160a;
     --bg-2: #5a2a12;
     --text: #0b1b2b;
@@ -570,7 +571,6 @@
 
   .summaries-list { display: flex; flex-direction: column; gap: 1.25rem; }
 
-  /* Debrief card */
   .debrief-card {
     background: #ffffff; border: 1px solid var(--border); border-radius: 14px;
     padding: 1.25rem 1.25rem 1rem 1.25rem; box-shadow: 0 10px 24px rgba(0,0,0,0.06);
@@ -582,21 +582,20 @@
   .debrief-rule { height: 1px; background: var(--border); }
   .debrief-label { color: var(--ink-strong); font-weight: 800; letter-spacing: 0.02em; }
 
-  .debrief-company { color: var(--ink-strong); font-size: 1.3rem; font-weight: 800; margin: 0.1rem 0 0.75rem 0; }
+  .debrief-title { margin: 0.25rem 0 0.25rem 0; color: var(--ink-strong); font-size: 1.15rem; font-weight: 800; }
+  .debrief-company { color: var(--ink); font-size: 1rem; font-weight: 700; margin: 0 0 0.5rem 0; }
 
   .debrief-section-title {
-    color: var(--ink); font-weight: 800; font-size: 1.02rem; margin: 0 0 0.5rem 0; padding-bottom: 0.4rem; border-bottom: 1px solid var(--border);
+    color: var(--ink); font-weight: 800; font-size: 1rem; margin: 0.25rem 0 0.4rem 0; padding-bottom: 0.35rem; border-bottom: 1px solid var(--border);
   }
 
-  .debrief-bullets { margin: 0.3rem 0 0.25rem 1.25rem; color: var(--ink); }
-  .debrief-bullets li { margin: 0.38rem 0; line-height: 1.55; }
-
   .debrief-body { color: var(--ink); line-height: 1.6; }
-  .debrief-line { display: flex; gap: 0.5rem; margin: 0.35rem 0; }
-  .debrief-line .dot { color: var(--primary-2); }
   .debrief-h { font-weight: 800; margin: 0.6rem 0 0.25rem 0; color: var(--ink); }
   .debrief-text { margin: 0.25rem 0; color: var(--ink); }
   .debrief-spacer { height: 0.45rem; }
+
+  .debrief-bullets { margin: 0.35rem 0 0.25rem 1.25rem; color: var(--ink); }
+  .debrief-bullets li { margin: 0.38rem 0; line-height: 1.55; }
 
   .debrief-totals { margin-top: 0.6rem; color: var(--ink-soft); font-weight: 700; }
   .debrief-totals .divider { margin: 0 0.5rem; color: #b88f6d; }
