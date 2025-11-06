@@ -32,6 +32,7 @@
 
 	let summaries: ResearchEntry[] = [];
 	let debrief: Debrief | null = null;
+	let lastCompanyName = '';
 
 	let isLoading = false;
 	let error = '';
@@ -49,7 +50,7 @@
 	function formatDate(value?: string): string {
 		if (!value) return '';
 		const trimmed = value.trim();
-	 const parsed = Date.parse(trimmed);
+		const parsed = Date.parse(trimmed);
 		if (!Number.isNaN(parsed)) {
 			const d = new Date(parsed);
 			return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
@@ -62,13 +63,17 @@
 	}
 
 	function normalizeBulletPoint(text: string): string {
-		// Remove accidental leading/trailing bold markers and whitespace
-		return text.replace(/^\s*\*\*\s*/, '').replace(/\s*\*\*\s*$/, '').trim();
+		return text.replace(/^\s*\*\*\s*/, '').replace(/\s*\*\*\s*$/, '').replace(/^-\s*/, '').trim();
 	}
 
 	function prettyKey(key: string): string {
 		if (!key) return key;
 		return key.charAt(0).toUpperCase() + key.slice(1);
+	}
+
+	function getDisplayCompany(): string {
+		const fromSummaries = summaries.find(s => (s.companyName || '').trim().length > 0)?.companyName || '';
+		return fromSummaries || lastCompanyName || formData.companyName || 'Company';
 	}
 
 	async function submitResearch() {
@@ -86,7 +91,7 @@
 				companyWebsite: formData.companyWebsite
 			};
 
-			console.log('Submitting research to webhook:', webhookUrl, payload);
+			lastCompanyName = formData.companyName;
 
 			const response = await fetch(webhookUrl, {
 				method: 'POST',
@@ -99,11 +104,7 @@
 				body: JSON.stringify(payload)
 			});
 
-			console.log('Webhook response status:', response.status, response.statusText);
-
 			const rawText = await response.text();
-			console.log('Webhook raw body length:', rawText.length);
-			console.log('Webhook raw body (preview 1k):', rawText.slice(0, 1000));
 
 			if (!response.ok) {
 				throw new Error(`HTTP ${response.status} ${response.statusText}${rawText ? ` - ${rawText}` : ''}`);
@@ -113,7 +114,7 @@
 			try {
 				data = JSON.parse(rawText);
 			} catch {
-				console.warn('Response was not valid JSON.');
+				// non-JSON response
 			}
 
 			const isNonEmpty = (v: unknown) => typeof v === 'string' && v.trim().length > 0;
@@ -141,13 +142,12 @@
 				const category = typeof obj.category === 'string' ? obj.category : (categoryHint || 'Research');
 				const postedDate = typeof obj.postedDate === 'string' ? obj.postedDate : '';
 
-				// Skip if error-only or all fields empty
 				if (isNonEmpty(err) && !isNonEmpty(title) && !isNonEmpty(summary) && !isNonEmpty(url)) return;
 				if (!isNonEmpty(title) && !isNonEmpty(summary) && !isNonEmpty(url)) return;
 
 				bucket.push({
 					id: makeId(category || 'item'),
-					companyName: formData.companyName,
+					companyName: payload.companyName,
 					category: category || 'Research',
 					title: title || (isNonEmpty(err) ? `${category} Error` : ''),
 					summary: summary || err || '',
@@ -156,53 +156,43 @@
 				});
 			};
 
-			// Normalize to list and extract debrief first if present
 			const baseList: unknown[] = Array.isArray(data)
 				? data
 				: (data && typeof data === 'object' ? [data] : []);
 
-			console.log('Normalized list length:', baseList.length);
-
 			let remainingList: unknown[] = baseList;
-			// First element is always a debrief now
+
+			// First element is the debrief
 			if (baseList.length > 0) {
 				const first = peel(baseList[0]);
 				if (first && typeof first === 'object' && !Array.isArray(first)) {
 					const rec = first as Record<string, unknown>;
-					// Heuristic: presence of fullBody or bulletPoints marks a debrief
-					if ('fullBody' in rec || 'bulletPoints' in rec) {
-						const d: Debrief = {
+					if ('fullBody' in rec || 'bulletPoints' in rec || 'title' in rec) {
+						debrief = {
 							title: typeof rec.title === 'string' ? rec.title : 'Content Debrief',
 							fullBody: typeof rec.fullBody === 'string' ? rec.fullBody : undefined,
-							bulletPoints: Array.isArray(rec.bulletPoints) ? rec.bulletPoints.filter((s: unknown) => typeof s === 'string' && s.trim().length > 0) as string[] : undefined,
+							bulletPoints: Array.isArray(rec.bulletPoints) ? (rec.bulletPoints as unknown[]).filter((s) => typeof s === 'string' && s.trim().length > 0) as string[] : undefined,
 							totals: (rec.totals && typeof rec.totals === 'object') ? rec.totals as Record<string, number> : undefined,
 							bulletPointCount: typeof rec.bulletPointCount === 'number' ? rec.bulletPointCount : undefined
 						};
-						debrief = d;
 						remainingList = baseList.slice(1);
-						console.log('Debrief extracted:', d.title);
 					}
 				}
 			}
 
 			const newEntries: ResearchEntry[] = [];
 
-			remainingList.forEach((item, idx) => {
-				console.log(`Item[${idx}]`, item);
+			remainingList.forEach((item) => {
 				if (!item || typeof item !== 'object' || Array.isArray(item)) return;
-
 				const rec = item as Record<string, unknown>;
-
 				const hasDirectShape = ('title' in rec) || ('summary' in rec) || ('url' in rec) || ('category' in rec) || ('postedDate' in rec);
 				if (hasDirectShape) {
 					pushIfValid(newEntries, rec);
 					return;
 				}
-
 				for (const [categoryKey, rawVal] of Object.entries(rec)) {
 					const category = categoryKey.toString();
 					let v = peel(rawVal);
-
 					if (Array.isArray(v)) {
 						v.forEach((child) => {
 							const obj = peel(child);
@@ -212,13 +202,11 @@
 						});
 					} else if (v && typeof v === 'object') {
 						pushIfValid(newEntries, v as Record<string, unknown>, category);
-					} else {
-						// Primitive/empty -> skip
 					}
 				}
 			});
 
-			// Deduplicate by URL (keep first occurrence)
+			// Deduplicate by URL
 			const seen = new Set<string>();
 			const deduped = newEntries.filter((e) => {
 				const key = (e.url || '').trim().toLowerCase();
@@ -228,15 +216,10 @@
 				return true;
 			});
 
-			console.log('Mapped entries count (deduped):', deduped.length);
-			if (deduped.length > 0) {
-				console.table(deduped.map(e => ({ category: e.category, title: e.title, url: e.url, postedDate: e.postedDate || '' })));
-			}
-
 			if (deduped.length === 0 && !debrief) {
 				const placeholder: ResearchEntry = {
 					id: makeId('no-results'),
-					companyName: formData.companyName,
+					companyName: payload.companyName,
 					category: 'Research',
 					title: 'No articles found',
 					summary: '',
@@ -247,17 +230,13 @@
 				summaries = [...deduped, ...summaries];
 			}
 
-			console.log('Summaries after update (length):', summaries.length);
-
 			formData = {
 				companyName: '',
 				companyWebsite: ''
 			};
 			activeTab = 'summaries';
-			console.log('Switched to tab:', activeTab);
 
 		} catch (err) {
-			console.error('Error submitting research:', err);
 			const message = err instanceof Error ? err.message : 'Failed to submit research request';
 			error = message.includes('Failed to fetch') ? 'Failed to fetch (likely CORS). See note below.' : message;
 		} finally {
@@ -268,6 +247,7 @@
 	function clearSummaries() {
 		summaries = [];
 		debrief = null;
+		lastCompanyName = '';
 	}
 
 </script>
@@ -391,13 +371,18 @@
           <div class="summaries-list">
             {#if debrief}
               <article class="debrief-card">
-                <div class="debrief-header">
-                  <span class="debrief-badge">Debrief</span>
-                  <h3 class="debrief-title">{debrief.title || 'Content Debrief'}</h3>
+                <div class="debrief-top">
+                  <div class="debrief-top-line"></div>
+                  <div class="debrief-label">Debrief</div>
+                  <div class="debrief-top-line"></div>
                 </div>
 
+                <h3 class="debrief-company">{getDisplayCompany()}</h3>
+
+                <h4 class="debrief-section">Executive Summary</h4>
+
                 {#if debrief.bulletPoints && debrief.bulletPoints.length > 0}
-                  <ul class="debrief-list">
+                  <ul class="debrief-bullets">
                     {#each debrief.bulletPoints as bp}
                       <li><strong>{normalizeBulletPoint(bp)}</strong></li>
                     {/each}
@@ -406,7 +391,9 @@
                   <div class="debrief-body">
                     {#each debrief.fullBody.split('\n') as line}
                       {#if line.trim().startsWith('- ')}
-                        <div class="debrief-line"><span>•</span> <strong>{line.trim().slice(2)}</strong></div>
+                        <div class="debrief-line"><span class="dot">•</span> <strong>{line.trim().slice(2)}</strong></div>
+                      {:else if /^#{1,4}\s/.test(line)}
+                        <div class="debrief-h">{line.replace(/^#+\s/, '')}</div>
                       {:else if line.trim().length === 0}
                         <div class="debrief-spacer"></div>
                       {:else}
@@ -429,7 +416,7 @@
                 {/if}
               </article>
 
-              <div class="section-divider" aria-hidden="true"></div>
+              <div class="sources-title">Sources</div>
             {/if}
 
             {#each summaries as entry (entry.id)}
@@ -465,23 +452,28 @@
 
 <style>
   :root {
-    --bg: #ffffff;
-    --text: #111827;
-    --muted: #6b7280;
-    --primary: #667eea;
-    --primary-2: #764ba2;
+    /* Intelligent Resourcing–like teal/navy palette */
+    --bg: #0b1420;
+    --bg-2: #11263b;
+    --text: #0b1b2b;
+    --muted: #5b6b7a;
+    --primary: #00c2a8;
+    --primary-2: #008a7a;
     --card: #ffffff;
-    --card-muted: #f9fafb;
-    --border: #e5e7eb;
-    --border-strong: #d1d5db;
+    --card-muted: #f6f9fb;
+    --border: #e4edf2;
+    --border-strong: #cfe0e8;
     --danger: #ef4444;
     --danger-2: #dc2626;
+    --ink-strong: #0b1b2b;
+    --ink: #1f2a37;
+    --ink-soft: #4b5563;
   }
 
   :global(body) {
     margin: 0;
     padding: 0;
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    background: linear-gradient(135deg, var(--bg) 0%, var(--bg-2) 100%);
     min-height: 100vh;
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     color-scheme: light;
@@ -489,7 +481,7 @@
   }
 
   .container {
-    max-width: 1200px;
+    max-width: 1100px;
     margin: 0 auto;
     padding: 2rem;
     min-height: 100vh;
@@ -497,31 +489,31 @@
 
   .header {
     text-align: center;
-    margin-bottom: 3rem;
-    color: #ffffff;
+    margin-bottom: 2.25rem;
+    color: #e8f8f5;
   }
 
   .title {
-    font-size: 3rem;
+    font-size: 2.5rem;
     font-weight: 700;
     margin: 0;
-    text-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    text-shadow: 0 2px 4px rgba(0,0,0,0.2);
   }
 
   .subtitle {
-    font-size: 1.25rem;
+    font-size: 1.05rem;
     margin: 0.5rem 0 0 0;
-    opacity: 0.95;
+    opacity: 0.9;
     font-weight: 500;
   }
 
   .tabs {
     display: flex;
     gap: 0.5rem;
-    margin-bottom: 2rem;
-    background: rgba(255,255,255,0.12);
+    margin-bottom: 1.25rem;
+    background: rgba(255,255,255,0.08);
     border-radius: 12px;
-    padding: 0.5rem;
+    padding: 0.4rem;
     backdrop-filter: blur(10px);
   }
 
@@ -529,10 +521,10 @@
     flex: 1;
     background: transparent;
     border: none;
-    color: #ffffff;
-    padding: 1rem 2rem;
-    border-radius: 8px;
-    font-size: 1rem;
+    color: #eafaf6;
+    padding: 0.9rem 1.25rem;
+    border-radius: 9px;
+    font-size: 0.98rem;
     font-weight: 600;
     cursor: pointer;
     transition: all 0.2s ease;
@@ -544,22 +536,22 @@
   }
 
   .tab:hover {
-    background: rgba(255,255,255,0.18);
+    background: rgba(255,255,255,0.16);
   }
 
   .tab:focus-visible {
-    box-shadow: 0 0 0 3px rgba(255,255,255,0.6);
+    box-shadow: 0 0 0 3px rgba(0, 194, 168, 0.55);
   }
 
   .tab.active {
     background: #ffffff;
-    color: var(--primary);
-    box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+    color: var(--primary-2);
+    box-shadow: 0 6px 18px rgba(0,0,0,0.12);
   }
 
   .badge {
     background: var(--primary);
-    color: #ffffff;
+    color: #043a35;
     border-radius: 9999px;
     min-width: 24px;
     height: 24px;
@@ -568,7 +560,7 @@
     align-items: center;
     justify-content: center;
     font-size: 0.75rem;
-    font-weight: 700;
+    font-weight: 800;
     line-height: 1;
   }
 
@@ -576,19 +568,17 @@
     background: var(--card);
     color: var(--text);
     border-radius: 16px;
-    box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+    box-shadow: 0 22px 44px rgba(0,0,0,0.14);
     overflow: hidden;
   }
 
-  .research-section {
-    padding: 3rem;
-  }
+  .research-section { padding: 2.25rem; }
 
   .form-card h2 {
-    color: #374151;
-    font-size: 1.875rem;
-    font-weight: 600;
-    margin: 0 0 2rem 0;
+    color: var(--ink-strong);
+    font-size: 1.6rem;
+    font-weight: 700;
+    margin: 0 0 1.5rem 0;
     text-align: center;
   }
 
@@ -598,127 +588,98 @@
     gap: 0.75rem;
     padding: 1rem;
     border-radius: 8px;
-    margin-bottom: 1.5rem;
+    margin-bottom: 1.25rem;
   }
 
   .alert.error {
-    background: #fef2f2;
+    background: #ffefef;
     color: var(--danger-2);
-    border: 1px solid #fecaca;
+    border: 1px solid #ffd0d0;
   }
 
-  .alert-icon {
-    width: 20px;
-    height: 20px;
-    flex-shrink: 0;
-  }
+  .alert-icon { width: 20px; height: 20px; flex-shrink: 0; }
 
-  .form {
-    max-width: 500px;
-    margin: 0 auto;
-  }
+  .form { max-width: 520px; margin: 0 auto; }
 
-  .form-group {
-    margin-bottom: 1.5rem;
-  }
+  .form-group { margin-bottom: 1.25rem; }
 
   .label {
     display: block;
     font-weight: 600;
-    color: #374151;
+    color: var(--ink);
     margin-bottom: 0.5rem;
-    font-size: 0.9rem;
+    font-size: 0.92rem;
   }
 
   .input {
     width: 100%;
-    padding: 0.875rem 1rem;
+    padding: 0.85rem 1rem;
     border: 2px solid var(--border);
-    border-radius: 8px;
+    border-radius: 10px;
     font-size: 1rem;
     transition: all 0.2s ease;
     background: #ffffff;
-    color: #111827;
+    color: #0b1b2b;
   }
 
-  .input::placeholder {
-    color: #9ca3af;
-  }
+  .input::placeholder { color: #99a7b3; }
 
   .input:focus {
     outline: none;
     border-color: var(--primary);
-    box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.15);
+    box-shadow: 0 0 0 4px rgba(0, 194, 168, 0.15);
   }
 
   .input:disabled {
-    background: #f3f4f6;
+    background: #f1f6f8;
     opacity: 0.75;
     cursor: not-allowed;
-    color: #111827;
+    color: #0b1b2b;
   }
 
   .submit-btn {
     width: 100%;
     background: linear-gradient(135deg, var(--primary) 0%, var(--primary-2) 100%);
-    color: #ffffff;
+    color: #042a26;
     border: none;
-    padding: 1rem 2rem;
-    border-radius: 8px;
+    padding: 0.95rem 2rem;
+    border-radius: 10px;
     font-size: 1rem;
-    font-weight: 700;
+    font-weight: 800;
     cursor: pointer;
     transition: all 0.2s ease;
     display: flex;
     align-items: center;
     justify-content: center;
     gap: 0.5rem;
-    margin-top: 1rem;
+    margin-top: 0.5rem;
   }
 
   .submit-btn:hover:not(:disabled) {
     transform: translateY(-2px);
-    box-shadow: 0 8px 20px rgba(102, 126, 234, 0.3);
+    box-shadow: 0 10px 24px rgba(0, 194, 168, 0.28);
   }
 
-  .submit-btn:disabled {
-    opacity: 0.75;
-    cursor: not-allowed;
-    transform: none;
-    box-shadow: none;
-  }
+  .submit-btn:disabled { opacity: 0.75; cursor: not-allowed; transform: none; box-shadow: none; }
 
-  .submit-btn:focus-visible {
-    outline: 3px solid rgba(102, 126, 234, 0.4);
-    outline-offset: 2px;
-  }
+  .submit-btn:focus-visible { outline: 3px solid rgba(0, 194, 168, 0.4); outline-offset: 2px; }
 
-  .spinner {
-    width: 20px;
-    height: 20px;
-    animation: spin 1s linear infinite;
-  }
+  .spinner { width: 20px; height: 20px; animation: spin 1s linear infinite; }
+  @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 
-  @keyframes spin {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
-  }
-
-  .summaries-section {
-    padding: 3rem;
-  }
+  .summaries-section { padding: 2.25rem; }
 
   .summaries-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 2rem;
+    margin-bottom: 1.25rem;
   }
 
   .summaries-header h2 {
-    color: #374151;
-    font-size: 1.875rem;
-    font-weight: 600;
+    color: var(--ink-strong);
+    font-size: 1.6rem;
+    font-weight: 700;
     margin: 0;
   }
 
@@ -726,222 +687,147 @@
     background: var(--danger);
     color: #ffffff;
     border: none;
-    padding: 0.5rem 1rem;
-    border-radius: 6px;
+    padding: 0.55rem 0.95rem;
+    border-radius: 8px;
     font-size: 0.9rem;
-    font-weight: 600;
+    font-weight: 700;
     cursor: pointer;
     transition: background 0.15s ease, transform 0.15s ease;
   }
 
-  .clear-btn:hover {
-    background: var(--danger-2);
-    transform: translateY(-1px);
-  }
+  .clear-btn:hover { background: var(--danger-2); transform: translateY(-1px); }
+  .clear-btn:focus-visible { outline: 3px solid rgba(239, 68, 68, 0.35); outline-offset: 2px; }
 
-  .clear-btn:focus-visible {
-    outline: 3px solid rgba(239, 68, 68, 0.35);
-    outline-offset: 2px;
-  }
+  .empty-state { text-align: center; padding: 3.25rem 1.5rem; color: var(--muted); }
+  .empty-icon { width: 60px; height: 60px; margin: 0 auto 1rem; opacity: 0.7; }
+  .empty-state h3 { font-size: 1.15rem; font-weight: 800; margin: 0 0 0.5rem 0; color: var(--ink-strong); }
+  .empty-state p { margin: 0; font-size: 0.98rem; }
 
-  .empty-state {
-    text-align: center;
-    padding: 4rem 2rem;
-    color: var(--muted);
-  }
+  .summaries-list { display: flex; flex-direction: column; gap: 1.25rem; }
 
-  .empty-icon {
-    width: 64px;
-    height: 64px;
-    margin: 0 auto 1rem;
-    opacity: 0.6;
-  }
-
-  .empty-state h3 {
-    font-size: 1.25rem;
-    font-weight: 700;
-    margin: 0 0 0.5rem 0;
-    color: #374151;
-  }
-
-  .empty-state p {
-    margin: 0;
-    font-size: 1rem;
-  }
-
-  .summaries-list {
-    display: flex;
-    flex-direction: column;
-    gap: 1.5rem;
-  }
-
+  /* Debrief styling (companynews.ai-like) */
   .debrief-card {
     background: #ffffff;
-    border: 2px solid var(--border);
+    border: 1px solid var(--border);
     border-radius: 14px;
-    padding: 1.5rem;
-    box-shadow: 0 8px 20px rgba(0,0,0,0.06);
+    padding: 1.25rem 1.25rem 1rem 1.25rem;
+    box-shadow: 0 10px 24px rgba(0,0,0,0.06);
   }
 
-  .debrief-header {
-    display: flex;
-    align-items: baseline;
-    gap: 0.5rem;
-    margin-bottom: 0.75rem;
+  .debrief-top {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    gap: 0.75rem;
+    align-items: center;
+    margin-bottom: 0.7rem;
+  }
+  .debrief-top-line { height: 1px; background: var(--border); }
+  .debrief-label {
+    color: var(--ink-strong);
+    font-weight: 800;
+    letter-spacing: 0.02em;
   }
 
-  .debrief-badge {
-    display: inline-block;
-    background: #e0e7ff;
-    color: #3730a3;
-    border-radius: 9999px;
-    padding: 0.125rem 0.5rem;
-    font-size: 0.75rem;
-    font-weight: 700;
+  .debrief-company {
+    color: var(--ink-strong);
+    font-size: 1.3rem;
+    font-weight: 800;
+    margin: 0.1rem 0 0.75rem 0;
   }
 
-  .debrief-title {
-    margin: 0;
-    font-size: 1.25rem;
-    color: #111827;
-    font-weight: 700;
+  .debrief-section {
+    color: var(--ink);
+    font-weight: 800;
+    font-size: 1.02rem;
+    margin: 0 0 0.6rem 0;
+    padding-bottom: 0.45rem;
+    border-bottom: 1px solid var(--border);
   }
 
-  .debrief-list {
-    margin: 0.5rem 0 0 0;
+  .debrief-bullets {
+    margin: 0.3rem 0 0.25rem 0;
     padding-left: 1.25rem;
-    color: #374151;
+    color: var(--ink);
   }
+  .debrief-bullets li { margin: 0.38rem 0; line-height: 1.55; }
 
-  .debrief-list li {
-    margin: 0.4rem 0;
-    line-height: 1.5;
-  }
-
-  .debrief-body {
-    color: #374151;
-    line-height: 1.6;
-  }
-
-  .debrief-line {
-    display: flex;
-    gap: 0.5rem;
-    margin: 0.35rem 0;
-  }
-
-  .debrief-text {
-    margin: 0.35rem 0;
-  }
-
-  .debrief-spacer {
-    height: 0.5rem;
-  }
+  .debrief-body { color: var(--ink); line-height: 1.6; }
+  .debrief-line { display: flex; gap: 0.5rem; margin: 0.35rem 0; }
+  .debrief-line .dot { color: var(--primary-2); }
+  .debrief-h { font-weight: 800; margin: 0.6rem 0 0.25rem 0; color: var(--ink); }
+  .debrief-text { margin: 0.25rem 0; color: var(--ink); }
+  .debrief-spacer { height: 0.45rem; }
 
   .debrief-totals {
-    margin-top: 0.75rem;
-    color: #4b5563;
-    font-weight: 600;
+    margin-top: 0.6rem;
+    color: var(--ink-soft);
+    font-weight: 700;
   }
+  .debrief-totals .divider { margin: 0 0.5rem; color: #9fb2bf; }
 
-  .debrief-totals .divider {
-    margin: 0 0.5rem;
-    color: #9ca3af;
-  }
-
-  .section-divider {
-    height: 1px;
-    background: var(--border);
-    margin: 0.5rem 0 0.25rem 0;
+  .sources-title {
+    margin: 0.75rem 0 -0.25rem 0;
+    color: var(--ink-strong);
+    font-weight: 800;
+    font-size: 1rem;
+    border-top: 1px solid var(--border);
+    padding-top: 0.75rem;
   }
 
   .summary-card {
     background: var(--card-muted);
     border: 1px solid var(--border);
     border-radius: 12px;
-    padding: 1.5rem;
+    padding: 1.1rem;
     transition: all 0.2s ease;
   }
 
-  .summary-card:hover {
-    box-shadow: 0 4px 12px rgba(0,0,0,0.06);
-    border-color: var(--border-strong);
-  }
+  .summary-card:hover { box-shadow: 0 6px 16px rgba(0,0,0,0.06); border-color: var(--border-strong); }
 
-  .summary-meta {
-    margin-bottom: 0.5rem;
-  }
+  .summary-meta { margin-bottom: 0.45rem; }
 
   .category-badge {
     display: inline-block;
-    background: #e0e7ff;
-    color: #3730a3;
+    background: rgba(0, 194, 168, 0.14);
+    color: var(--primary-2);
+    border: 1px solid rgba(0, 194, 168, 0.34);
     border-radius: 9999px;
-    padding: 0.125rem 0.5rem;
-    font-size: 0.75rem;
-    font-weight: 700;
+    padding: 0.12rem 0.5rem;
+    font-size: 0.72rem;
+    font-weight: 800;
   }
 
   .date-badge {
     display: inline-block;
-    background: #eef2ff;
-    color: #374151;
+    background: #eef6f5;
+    color: var(--ink);
     border-radius: 9999px;
-    padding: 0.125rem 0.5rem;
-    font-size: 0.75rem;
-    font-weight: 600;
+    padding: 0.12rem 0.5rem;
+    font-size: 0.72rem;
+    font-weight: 700;
     margin-left: 0.5rem;
   }
 
-  .summary-content {
-    color: #374151;
-    line-height: 1.6;
-    font-size: 0.95rem;
-  }
+  .summary-content { color: var(--ink); line-height: 1.6; font-size: 0.96rem; }
 
   .summary-link {
     display: inline-block;
-    color: #1d4ed8;
-    font-weight: 700;
+    color: var(--primary-2);
+    font-weight: 800;
     text-decoration: none;
     margin-bottom: 0.25rem;
   }
+  .summary-link:hover { text-decoration: underline; }
+  .summary-link.disabled { color: var(--ink); font-weight: 800; margin-bottom: 0.25rem; }
 
-  .summary-link.disabled {
-    color: #374151;
-    font-weight: 700;
-    margin-bottom: 0.25rem;
-  }
-
-  .summary-link:hover {
-    text-decoration: underline;
-  }
-
-  .summary-text {
-    margin-top: 0.25rem;
-    color: #4b5563;
-  }
+  .summary-text { margin-top: 0.25rem; color: var(--ink-soft); }
 
   @media (max-width: 768px) {
-    .container {
-      padding: 1rem;
-    }
-    .title {
-      font-size: 2rem;
-    }
-    .research-section,
-    .summaries-section {
-      padding: 2rem 1.25rem;
-    }
-    .tabs {
-      flex-direction: column;
-    }
-    .tab {
-      padding: 0.875rem;
-    }
-    .summaries-header {
-      flex-direction: column;
-      align-items: flex-start;
-      gap: 1rem;
-    }
+    .container { padding: 1rem; }
+    .title { font-size: 2rem; }
+    .research-section, .summaries-section { padding: 1.5rem 1rem; }
+    .tabs { flex-direction: column; }
+    .tab { padding: 0.85rem; }
+    .summaries-header { flex-direction: column; align-items: flex-start; gap: 0.8rem; }
   }
 </style>
