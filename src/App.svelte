@@ -15,12 +15,11 @@
 		postedDate?: string;
 	}
 
+	// New debrief shape
 	interface Debrief {
 		title: string;
-		fullBody?: string;
-		bulletPoints?: string[];
-		totals?: Record<string, number>;
-		bulletPointCount?: number;
+		executiveSummary?: string;
+		supportingPoints?: string[];
 	}
 
 	let activeTab: 'research' | 'summaries' = 'research';
@@ -37,7 +36,7 @@
 	let isLoading = false;
 	let error = '';
 
-	// Use your n8n production URL (workflow is active)
+	// n8n production webhook (consider proxying via backend for CORS/security)
 	const webhookUrl = 'https://n8n.intelligentresourcing.co/webhook/d95c8e70-5cb1-4323-838b-8a910fbecf65';
 
 	let __uid = 0;
@@ -62,13 +61,9 @@
 		return trimmed;
 	}
 
-	function normalizeBulletPoint(text: string): string {
-		return text.replace(/^\s*\*\*\s*/, '').replace(/\s*\*\*\s*$/, '').replace(/^-\s*/, '').trim();
-	}
-
-	function prettyKey(key: string): string {
-		if (!key) return key;
-		return key.charAt(0).toUpperCase() + key.slice(1);
+	function normalizePoint(text: string): string {
+		// Strip leading dash and surrounding asterisks if present
+		return text.replace(/^\s*-\s*/, '').replace(/^\s*\*\*\s*|\s*\*\*\s*$/g, '').trim();
 	}
 
 	function getDisplayCompany(): string {
@@ -114,7 +109,7 @@
 			try {
 				data = JSON.parse(rawText);
 			} catch {
-				// non-JSON response
+				// Non-JSON response
 			}
 
 			const isNonEmpty = (v: unknown) => typeof v === 'string' && v.trim().length > 0;
@@ -156,24 +151,29 @@
 				});
 			};
 
+			// Normalize to list
 			const baseList: unknown[] = Array.isArray(data)
 				? data
 				: (data && typeof data === 'object' ? [data] : []);
 
 			let remainingList: unknown[] = baseList;
 
-			// First element is the debrief
+			// NEW: first element is the Executive Summary object
 			if (baseList.length > 0) {
 				const first = peel(baseList[0]);
 				if (first && typeof first === 'object' && !Array.isArray(first)) {
 					const rec = first as Record<string, unknown>;
-					if ('fullBody' in rec || 'bulletPoints' in rec || 'title' in rec) {
+					// Expecting keys: title (string), executive_summary (string), supporting_points (string[])
+					if ('executive_summary' in rec || 'supporting_points' in rec || 'title' in rec) {
+						const exec = typeof rec['executive_summary'] === 'string' ? rec['executive_summary'] : undefined;
+						const points = Array.isArray(rec['supporting_points'])
+							? (rec['supporting_points'] as unknown[]).filter((s) => typeof s === 'string' && s.trim().length > 0) as string[]
+							: undefined;
+
 						debrief = {
-							title: typeof rec.title === 'string' ? rec.title : 'Content Debrief',
-							fullBody: typeof rec.fullBody === 'string' ? rec.fullBody : undefined,
-							bulletPoints: Array.isArray(rec.bulletPoints) ? (rec.bulletPoints as unknown[]).filter((s) => typeof s === 'string' && s.trim().length > 0) as string[] : undefined,
-							totals: (rec.totals && typeof rec.totals === 'object') ? rec.totals as Record<string, number> : undefined,
-							bulletPointCount: typeof rec.bulletPointCount === 'number' ? rec.bulletPointCount : undefined
+							title: typeof rec['title'] === 'string' ? rec['title'] : 'Executive Summary',
+							executiveSummary: exec,
+							supportingPoints: points
 						};
 						remainingList = baseList.slice(1);
 					}
@@ -185,14 +185,17 @@
 			remainingList.forEach((item) => {
 				if (!item || typeof item !== 'object' || Array.isArray(item)) return;
 				const rec = item as Record<string, unknown>;
+
 				const hasDirectShape = ('title' in rec) || ('summary' in rec) || ('url' in rec) || ('category' in rec) || ('postedDate' in rec);
 				if (hasDirectShape) {
 					pushIfValid(newEntries, rec);
 					return;
 				}
+
 				for (const [categoryKey, rawVal] of Object.entries(rec)) {
 					const category = categoryKey.toString();
 					let v = peel(rawVal);
+
 					if (Array.isArray(v)) {
 						v.forEach((child) => {
 							const obj = peel(child);
@@ -370,53 +373,35 @@
         {:else}
           <div class="summaries-list">
             {#if debrief}
-              <article class="debrief-card">
-                <div class="debrief-top">
-                  <div class="debrief-top-line"></div>
-                  <div class="debrief-label">Debrief</div>
-                  <div class="debrief-top-line"></div>
-                </div>
+              <article class="debrief-card" aria-labelledby="debrief-heading">
+                <header class="debrief-header">
+                  <div class="debrief-rule" aria-hidden="true"></div>
+                  <h2 id="debrief-heading" class="debrief-label">Debrief</h2>
+                  <div class="debrief-rule" aria-hidden="true"></div>
+                </header>
 
                 <h3 class="debrief-company">{getDisplayCompany()}</h3>
 
-                <h4 class="debrief-section">Executive Summary</h4>
+                <section class="debrief-exec" aria-labelledby="exec-summary-title">
+                  <h4 id="exec-summary-title" class="debrief-section-title">Executive Summary</h4>
+                  {#if debrief.executiveSummary}
+                    <p class="debrief-paragraph">{debrief.executiveSummary}</p>
+                  {/if}
+                </section>
 
-                {#if debrief.bulletPoints && debrief.bulletPoints.length > 0}
-                  <ul class="debrief-bullets">
-                    {#each debrief.bulletPoints as bp}
-                      <li><strong>{normalizeBulletPoint(bp)}</strong></li>
-                    {/each}
-                  </ul>
-                {:else if debrief.fullBody}
-                  <div class="debrief-body">
-                    {#each debrief.fullBody.split('\n') as line}
-                      {#if line.trim().startsWith('- ')}
-                        <div class="debrief-line"><span class="dot">•</span> <strong>{line.trim().slice(2)}</strong></div>
-                      {:else if /^#{1,4}\s/.test(line)}
-                        <div class="debrief-h">{line.replace(/^#+\s/, '')}</div>
-                      {:else if line.trim().length === 0}
-                        <div class="debrief-spacer"></div>
-                      {:else}
-                        <div class="debrief-text">{line}</div>
-                      {/if}
-                    {/each}
-                  </div>
-                {/if}
-
-                {#if debrief.totals}
-                  <div class="debrief-totals">
-                    {#if 'uncategorised' in debrief.totals}
-                      <span>Totals: {prettyKey('uncategorised')}: {debrief.totals['uncategorised']}</span>
-                      <span class="divider">|</span>
-                    {/if}
-                    {#if 'overall' in debrief.totals}
-                      <span>Overall: {debrief.totals['overall']}</span>
-                    {/if}
-                  </div>
+                {#if debrief.supportingPoints && debrief.supportingPoints.length > 0}
+                  <section class="debrief-supporting" aria-labelledby="supporting-points-title">
+                    <h4 id="supporting-points-title" class="debrief-section-title">Supporting Points</h4>
+                    <ul class="debrief-list">
+                      {#each debrief.supportingPoints as sp}
+                        <li><strong>{normalizePoint(sp)}</strong></li>
+                      {/each}
+                    </ul>
+                  </section>
                 {/if}
               </article>
 
-              <div class="sources-title">Sources</div>
+              <div class="sources-title" role="heading" aria-level="3">Sources</div>
             {/if}
 
             {#each summaries as entry (entry.id)}
@@ -452,6 +437,7 @@
 
 <style>
   :root {
+    /* Orangy theme */
     --bg: #31160a;
     --bg-2: #5a2a12;
     --text: #0b1b2b;
@@ -470,7 +456,13 @@
   }
 
   :global(body) {
+    margin: 0;
+    padding: 0;
     background: linear-gradient(135deg, var(--bg) 0%, var(--bg-2) 100%);
+    min-height: 100vh;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    color-scheme: light;
+    color: var(--text);
   }
 
   .container {
@@ -483,7 +475,7 @@
   .header {
     text-align: center;
     margin-bottom: 2.25rem;
-    color: #e8f8f5;
+    color: #ffe9db;
   }
 
   .title {
@@ -514,7 +506,7 @@
     flex: 1;
     background: transparent;
     border: none;
-    color: #eafaf6;
+    color: #fff7ed;
     padding: 0.9rem 1.25rem;
     border-radius: 9px;
     font-size: 0.98rem;
@@ -545,6 +537,16 @@
   .badge {
     background: var(--primary);
     color: #3a1f04;
+    border-radius: 9999px;
+    min-width: 24px;
+    height: 24px;
+    padding: 0 8px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.75rem;
+    font-weight: 800;
+    line-height: 1;
   }
 
   .content {
@@ -610,11 +612,11 @@
   .input:focus {
     outline: none;
     border-color: var(--primary);
-    box-shadow: 0 0 0 4px rgba(0, 194, 168, 0.15);
+    box-shadow: 0 0 0 4px rgba(249, 115, 22, 0.18);
   }
 
   .input:disabled {
-    background: #f1f6f8;
+    background: #f1f1ef;
     opacity: 0.75;
     cursor: not-allowed;
     color: #0b1b2b;
@@ -623,7 +625,7 @@
   .submit-btn {
     width: 100%;
     background: linear-gradient(135deg, var(--primary) 0%, var(--primary-2) 100%);
-    color: #042a26;
+    color: #3a1f04;
     border: none;
     padding: 0.95rem 2rem;
     border-radius: 10px;
@@ -639,12 +641,12 @@
   }
 
   .submit-btn:hover:not(:disabled) {
+    transform: translateY(-2px);
     box-shadow: 0 10px 24px rgba(249, 115, 22, 0.28);
   }
 
   .submit-btn:disabled { opacity: 0.75; cursor: not-allowed; transform: none; box-shadow: none; }
-
-  .submit-btn:focus-visible { outline: 3px solid rgba(0, 194, 168, 0.4); outline-offset: 2px; }
+  .submit-btn:focus-visible { outline: 3px solid rgba(249, 115, 22, 0.35); outline-offset: 2px; }
 
   .spinner { width: 20px; height: 20px; animation: spin 1s linear infinite; }
   @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
@@ -687,7 +689,7 @@
 
   .summaries-list { display: flex; flex-direction: column; gap: 1.25rem; }
 
-  /* Debrief styling (companynews.ai-like) */
+  /* Debrief card */
   .debrief-card {
     background: #ffffff;
     border: 1px solid var(--border);
@@ -696,19 +698,15 @@
     box-shadow: 0 10px 24px rgba(0,0,0,0.06);
   }
 
-  .debrief-top {
+  .debrief-header {
     display: grid;
     grid-template-columns: 1fr auto 1fr;
     gap: 0.75rem;
     align-items: center;
     margin-bottom: 0.7rem;
   }
-  .debrief-top-line { height: 1px; background: var(--border); }
-  .debrief-label {
-    color: var(--ink-strong);
-    font-weight: 800;
-    letter-spacing: 0.02em;
-  }
+  .debrief-rule { height: 1px; background: var(--border); }
+  .debrief-label { color: var(--ink-strong); font-weight: 800; letter-spacing: 0.02em; }
 
   .debrief-company {
     color: var(--ink-strong);
@@ -717,38 +715,22 @@
     margin: 0.1rem 0 0.75rem 0;
   }
 
-  .debrief-section {
+  .debrief-section-title {
     color: var(--ink);
     font-weight: 800;
     font-size: 1.02rem;
-    margin: 0 0 0.6rem 0;
-    padding-bottom: 0.45rem;
+    margin: 0 0 0.5rem 0;
+    padding-bottom: 0.4rem;
     border-bottom: 1px solid var(--border);
   }
 
-  .debrief-bullets {
-    margin: 0.3rem 0 0.25rem 0;
-    padding-left: 1.25rem;
-    color: var(--ink);
-  }
-  .debrief-bullets li { margin: 0.38rem 0; line-height: 1.55; }
+  .debrief-paragraph { color: var(--ink); line-height: 1.65; margin: 0.25rem 0 0.5rem 0; }
 
-  .debrief-body { color: var(--ink); line-height: 1.6; }
-  .debrief-line { display: flex; gap: 0.5rem; margin: 0.35rem 0; }
-  .debrief-line .dot { color: var(--primary-2); }
-  .debrief-h { font-weight: 800; margin: 0.6rem 0 0.25rem 0; color: var(--ink); }
-  .debrief-text { margin: 0.25rem 0; color: var(--ink); }
-  .debrief-spacer { height: 0.45rem; }
-
-  .debrief-totals {
-    margin-top: 0.6rem;
-    color: var(--ink-soft);
-    font-weight: 700;
-  }
-  .debrief-totals .divider { margin: 0 0.5rem; color: #9fb2bf; }
+  .debrief-list { margin: 0.35rem 0 0.25rem 1.25rem; color: var(--ink); }
+  .debrief-list li { margin: 0.38rem 0; line-height: 1.55; }
 
   .sources-title {
-    margin: 0.75rem 0 -0.25rem 0;
+    margin: 0.8rem 0 -0.2rem 0;
     color: var(--ink-strong);
     font-weight: 800;
     font-size: 1rem;
@@ -769,14 +751,19 @@
   .summary-meta { margin-bottom: 0.45rem; }
 
   .category-badge {
+    display: inline-block;
     background: rgba(249, 115, 22, 0.14);
     color: var(--primary-2);
     border: 1px solid rgba(249, 115, 22, 0.34);
+    border-radius: 9999px;
+    padding: 0.12rem 0.5rem;
+    font-size: 0.72rem;
+    font-weight: 800;
   }
 
   .date-badge {
     display: inline-block;
-    background: #eef6f5;
+    background: #fff1e6;
     color: var(--ink);
     border-radius: 9999px;
     padding: 0.12rem 0.5rem;
