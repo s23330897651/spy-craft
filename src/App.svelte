@@ -15,11 +15,12 @@
 		postedDate?: string;
 	}
 
-	// New debrief shape
 	interface Debrief {
 		title: string;
-		executiveSummary?: string;
-		supportingPoints?: string[];
+		fullBody?: string;
+		bulletPoints?: string[];
+		totals?: Record<string, number>;
+		bulletPointCount?: number;
 	}
 
 	let activeTab: 'research' | 'summaries' = 'research';
@@ -36,7 +37,7 @@
 	let isLoading = false;
 	let error = '';
 
-	// n8n production webhook (consider proxying via backend for CORS/security)
+	// Use your n8n production URL (workflow is active)
 	const webhookUrl = 'https://n8n.intelligentresourcing.co/webhook/d95c8e70-5cb1-4323-838b-8a910fbecf65';
 
 	let __uid = 0;
@@ -61,9 +62,16 @@
 		return trimmed;
 	}
 
-	function normalizePoint(text: string): string {
-		// Strip leading dash and surrounding asterisks if present
-		return text.replace(/^\s*-\s*/, '').replace(/^\s*\*\*\s*|\s*\*\*\s*$/g, '').trim();
+	function normalizeBulletPoint(text: string): string {
+		return text
+			.replace(/^\s*-\s*/, '')
+			.replace(/^\s*\*\*\s*|\s*\*\*\s*$/g, '')
+			.trim();
+	}
+
+	function prettyKey(key: string): string {
+		if (!key) return key;
+		return key.charAt(0).toUpperCase() + key.slice(1);
 	}
 
 	function getDisplayCompany(): string {
@@ -109,7 +117,7 @@
 			try {
 				data = JSON.parse(rawText);
 			} catch {
-				// Non-JSON response
+				// non-JSON response
 			}
 
 			const isNonEmpty = (v: unknown) => typeof v === 'string' && v.trim().length > 0;
@@ -151,29 +159,24 @@
 				});
 			};
 
-			// Normalize to list
+			// Normalize to list and extract debrief first (fullBody/bulletPoints format)
 			const baseList: unknown[] = Array.isArray(data)
 				? data
 				: (data && typeof data === 'object' ? [data] : []);
 
 			let remainingList: unknown[] = baseList;
 
-			// NEW: first element is the Executive Summary object
 			if (baseList.length > 0) {
 				const first = peel(baseList[0]);
 				if (first && typeof first === 'object' && !Array.isArray(first)) {
 					const rec = first as Record<string, unknown>;
-					// Expecting keys: title (string), executive_summary (string), supporting_points (string[])
-					if ('executive_summary' in rec || 'supporting_points' in rec || 'title' in rec) {
-						const exec = typeof rec['executive_summary'] === 'string' ? rec['executive_summary'] : undefined;
-						const points = Array.isArray(rec['supporting_points'])
-							? (rec['supporting_points'] as unknown[]).filter((s) => typeof s === 'string' && s.trim().length > 0) as string[]
-							: undefined;
-
+					if ('fullBody' in rec || 'bulletPoints' in rec || 'title' in rec) {
 						debrief = {
-							title: typeof rec['title'] === 'string' ? rec['title'] : 'Executive Summary',
-							executiveSummary: exec,
-							supportingPoints: points
+							title: typeof rec.title === 'string' ? rec.title : 'Content Debrief',
+							fullBody: typeof rec.fullBody === 'string' ? rec.fullBody : undefined,
+							bulletPoints: Array.isArray(rec.bulletPoints) ? (rec.bulletPoints as unknown[]).filter((s) => typeof s === 'string' && s.trim().length > 0) as string[] : undefined,
+							totals: (rec.totals && typeof rec.totals === 'object') ? rec.totals as Record<string, number> : undefined,
+							bulletPointCount: typeof rec.bulletPointCount === 'number' ? rec.bulletPointCount : undefined
 						};
 						remainingList = baseList.slice(1);
 					}
@@ -382,22 +385,44 @@
 
                 <h3 class="debrief-company">{getDisplayCompany()}</h3>
 
-                <section class="debrief-exec" aria-labelledby="exec-summary-title">
-                  <h4 id="exec-summary-title" class="debrief-section-title">Executive Summary</h4>
-                  {#if debrief.executiveSummary}
-                    <p class="debrief-paragraph">{debrief.executiveSummary}</p>
-                  {/if}
-                </section>
-
-                {#if debrief.supportingPoints && debrief.supportingPoints.length > 0}
-                  <section class="debrief-supporting" aria-labelledby="supporting-points-title">
-                    <h4 id="supporting-points-title" class="debrief-section-title">Supporting Points</h4>
-                    <ul class="debrief-list">
-                      {#each debrief.supportingPoints as sp}
-                        <li><strong>{normalizePoint(sp)}</strong></li>
+                {#if debrief.bulletPoints && debrief.bulletPoints.length > 0}
+                  <section aria-labelledby="exec-summary-title">
+                    <h4 id="exec-summary-title" class="debrief-section-title">Executive Summary</h4>
+                    <ul class="debrief-bullets">
+                      {#each debrief.bulletPoints as bp}
+                        <li><strong>{normalizeBulletPoint(bp)}</strong></li>
                       {/each}
                     </ul>
                   </section>
+                {:else if debrief.fullBody}
+                  <section aria-labelledby="exec-summary-title">
+                    <h4 id="exec-summary-title" class="debrief-section-title">Executive Summary</h4>
+                    <div class="debrief-body">
+                      {#each debrief.fullBody.split('\n') as line}
+                        {#if line.trim().startsWith('- ')}
+                          <div class="debrief-line"><span class="dot">•</span> <strong>{line.trim().slice(2)}</strong></div>
+                        {:else if /^#{1,4}\s/.test(line)}
+                          <div class="debrief-h">{line.replace(/^#+\s/, '')}</div>
+                        {:else if line.trim().length === 0}
+                          <div class="debrief-spacer"></div>
+                        {:else}
+                          <p class="debrief-text">{line}</p>
+                        {/if}
+                      {/each}
+                    </div>
+                  </section>
+                {/if}
+
+                {#if debrief.totals}
+                  <footer class="debrief-totals">
+                    {#if 'uncategorised' in debrief.totals}
+                      <span>Totals: {prettyKey('uncategorised')}: {debrief.totals['uncategorised']}</span>
+                      <span class="divider">|</span>
+                    {/if}
+                    {#if 'overall' in debrief.totals}
+                      <span>Overall: {debrief.totals['overall']}</span>
+                    {/if}
+                  </footer>
                 {/if}
               </article>
 
@@ -442,8 +467,8 @@
     --bg-2: #5a2a12;
     --text: #0b1b2b;
     --muted: #5b6b7a;
-    --primary: #f97316;    /* orange-500 */
-    --primary-2: #ea580c;  /* orange-600 */
+    --primary: #f97316;
+    --primary-2: #ea580c;
     --card: #ffffff;
     --card-muted: #f6f6f4;
     --border: #f0e5db;
@@ -465,186 +490,61 @@
     color: var(--text);
   }
 
-  .container {
-    max-width: 1100px;
-    margin: 0 auto;
-    padding: 2rem;
-    min-height: 100vh;
-  }
+  .container { max-width: 1100px; margin: 0 auto; padding: 2rem; min-height: 100vh; }
 
-  .header {
-    text-align: center;
-    margin-bottom: 2.25rem;
-    color: #ffe9db;
-  }
+  .header { text-align: center; margin-bottom: 2.25rem; color: #ffe9db; }
 
-  .title {
-    font-size: 2.5rem;
-    font-weight: 700;
-    margin: 0;
-    text-shadow: 0 2px 4px rgba(0,0,0,0.2);
-  }
+  .title { font-size: 2.5rem; font-weight: 700; margin: 0; text-shadow: 0 2px 4px rgba(0,0,0,0.2); }
 
-  .subtitle {
-    font-size: 1.05rem;
-    margin: 0.5rem 0 0 0;
-    opacity: 0.9;
-    font-weight: 500;
-  }
+  .subtitle { font-size: 1.05rem; margin: 0.5rem 0 0 0; opacity: 0.9; font-weight: 500; }
 
   .tabs {
-    display: flex;
-    gap: 0.5rem;
-    margin-bottom: 1.25rem;
-    background: rgba(255,255,255,0.08);
-    border-radius: 12px;
-    padding: 0.4rem;
-    backdrop-filter: blur(10px);
+    display: flex; gap: 0.5rem; margin-bottom: 1.25rem;
+    background: rgba(255,255,255,0.08); border-radius: 12px; padding: 0.4rem; backdrop-filter: blur(10px);
   }
 
   .tab {
-    flex: 1;
-    background: transparent;
-    border: none;
-    color: #fff7ed;
-    padding: 0.9rem 1.25rem;
-    border-radius: 9px;
-    font-size: 0.98rem;
-    font-weight: 600;
-    cursor: pointer;
-    transition: all 0.2s ease;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 0.5rem;
-    outline: none;
+    flex: 1; background: transparent; border: none; color: #fff7ed;
+    padding: 0.9rem 1.25rem; border-radius: 9px; font-size: 0.98rem; font-weight: 600; cursor: pointer;
+    transition: all 0.2s ease; display: flex; align-items: center; justify-content: center; gap: 0.5rem; outline: none;
   }
-
-  .tab:hover {
-    background: rgba(255,255,255,0.16);
-  }
-
-  .tab:focus-visible {
-    box-shadow: 0 0 0 3px rgba(249, 115, 22, 0.55);
-  }
-
-  .tab.active {
-    background: #ffffff;
-    color: var(--primary-2);
-    box-shadow: 0 6px 18px rgba(0,0,0,0.12);
-  }
+  .tab:hover { background: rgba(255,255,255,0.16); }
+  .tab:focus-visible { box-shadow: 0 0 0 3px rgba(249, 115, 22, 0.55); }
+  .tab.active { background: #ffffff; color: var(--primary-2); box-shadow: 0 6px 18px rgba(0,0,0,0.12); }
 
   .badge {
-    background: var(--primary);
-    color: #3a1f04;
-    border-radius: 9999px;
-    min-width: 24px;
-    height: 24px;
-    padding: 0 8px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 0.75rem;
-    font-weight: 800;
-    line-height: 1;
+    background: var(--primary); color: #3a1f04; border-radius: 9999px; min-width: 24px; height: 24px; padding: 0 8px;
+    display: inline-flex; align-items: center; justify-content: center; font-size: 0.75rem; font-weight: 800; line-height: 1;
   }
 
-  .content {
-    background: var(--card);
-    color: var(--text);
-    border-radius: 16px;
-    box-shadow: 0 22px 44px rgba(0,0,0,0.14);
-    overflow: hidden;
-  }
+  .content { background: var(--card); color: var(--text); border-radius: 16px; box-shadow: 0 22px 44px rgba(0,0,0,0.14); overflow: hidden; }
 
   .research-section { padding: 2.25rem; }
 
-  .form-card h2 {
-    color: var(--ink-strong);
-    font-size: 1.6rem;
-    font-weight: 700;
-    margin: 0 0 1.5rem 0;
-    text-align: center;
-  }
+  .form-card h2 { color: var(--ink-strong); font-size: 1.6rem; font-weight: 700; margin: 0 0 1.5rem 0; text-align: center; }
 
-  .alert {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    padding: 1rem;
-    border-radius: 8px;
-    margin-bottom: 1.25rem;
-  }
-
-  .alert.error {
-    background: #ffefef;
-    color: var(--danger-2);
-    border: 1px solid #ffd0d0;
-  }
-
+  .alert { display: flex; align-items: center; gap: 0.75rem; padding: 1rem; border-radius: 8px; margin-bottom: 1.25rem; }
+  .alert.error { background: #ffefef; color: var(--danger-2); border: 1px solid #ffd0d0; }
   .alert-icon { width: 20px; height: 20px; flex-shrink: 0; }
 
   .form { max-width: 520px; margin: 0 auto; }
-
   .form-group { margin-bottom: 1.25rem; }
-
-  .label {
-    display: block;
-    font-weight: 600;
-    color: var(--ink);
-    margin-bottom: 0.5rem;
-    font-size: 0.92rem;
-  }
+  .label { display: block; font-weight: 600; color: var(--ink); margin-bottom: 0.5rem; font-size: 0.92rem; }
 
   .input {
-    width: 100%;
-    padding: 0.85rem 1rem;
-    border: 2px solid var(--border);
-    border-radius: 10px;
-    font-size: 1rem;
-    transition: all 0.2s ease;
-    background: #ffffff;
-    color: #0b1b2b;
+    width: 100%; padding: 0.85rem 1rem; border: 2px solid var(--border); border-radius: 10px; font-size: 1rem;
+    transition: all 0.2s ease; background: #ffffff; color: #0b1b2b;
   }
-
   .input::placeholder { color: #99a7b3; }
-
-  .input:focus {
-    outline: none;
-    border-color: var(--primary);
-    box-shadow: 0 0 0 4px rgba(249, 115, 22, 0.18);
-  }
-
-  .input:disabled {
-    background: #f1f1ef;
-    opacity: 0.75;
-    cursor: not-allowed;
-    color: #0b1b2b;
-  }
+  .input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 4px rgba(249, 115, 22, 0.18); }
+  .input:disabled { background: #f1f1ef; opacity: 0.75; cursor: not-allowed; color: #0b1b2b; }
 
   .submit-btn {
-    width: 100%;
-    background: linear-gradient(135deg, var(--primary) 0%, var(--primary-2) 100%);
-    color: #3a1f04;
-    border: none;
-    padding: 0.95rem 2rem;
-    border-radius: 10px;
-    font-size: 1rem;
-    font-weight: 800;
-    cursor: pointer;
-    transition: all 0.2s ease;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 0.5rem;
-    margin-top: 0.5rem;
+    width: 100%; background: linear-gradient(135deg, var(--primary) 0%, var(--primary-2) 100%); color: #3a1f04;
+    border: none; padding: 0.95rem 2rem; border-radius: 10px; font-size: 1rem; font-weight: 800; cursor: pointer;
+    transition: all 0.2s ease; display: flex; align-items: center; justify-content: center; gap: 0.5rem; margin-top: 0.5rem;
   }
-
-  .submit-btn:hover:not(:disabled) {
-    transform: translateY(-2px);
-    box-shadow: 0 10px 24px rgba(249, 115, 22, 0.28);
-  }
-
+  .submit-btn:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 10px 24px rgba(249, 115, 22, 0.28); }
   .submit-btn:disabled { opacity: 0.75; cursor: not-allowed; transform: none; box-shadow: none; }
   .submit-btn:focus-visible { outline: 3px solid rgba(249, 115, 22, 0.35); outline-offset: 2px; }
 
@@ -653,32 +553,13 @@
 
   .summaries-section { padding: 2.25rem; }
 
-  .summaries-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 1.25rem;
-  }
-
-  .summaries-header h2 {
-    color: var(--ink-strong);
-    font-size: 1.6rem;
-    font-weight: 700;
-    margin: 0;
-  }
+  .summaries-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.25rem; }
+  .summaries-header h2 { color: var(--ink-strong); font-size: 1.6rem; font-weight: 700; margin: 0; }
 
   .clear-btn {
-    background: var(--danger);
-    color: #ffffff;
-    border: none;
-    padding: 0.55rem 0.95rem;
-    border-radius: 8px;
-    font-size: 0.9rem;
-    font-weight: 700;
-    cursor: pointer;
-    transition: background 0.15s ease, transform 0.15s ease;
+    background: var(--danger); color: #ffffff; border: none; padding: 0.55rem 0.95rem; border-radius: 8px; font-size: 0.9rem; font-weight: 700;
+    cursor: pointer; transition: background 0.15s ease, transform 0.15s ease;
   }
-
   .clear-btn:hover { background: var(--danger-2); transform: translateY(-1px); }
   .clear-btn:focus-visible { outline: 3px solid rgba(239, 68, 68, 0.35); outline-offset: 2px; }
 
@@ -691,99 +572,61 @@
 
   /* Debrief card */
   .debrief-card {
-    background: #ffffff;
-    border: 1px solid var(--border);
-    border-radius: 14px;
-    padding: 1.25rem 1.25rem 1rem 1.25rem;
-    box-shadow: 0 10px 24px rgba(0,0,0,0.06);
+    background: #ffffff; border: 1px solid var(--border); border-radius: 14px;
+    padding: 1.25rem 1.25rem 1rem 1.25rem; box-shadow: 0 10px 24px rgba(0,0,0,0.06);
   }
 
   .debrief-header {
-    display: grid;
-    grid-template-columns: 1fr auto 1fr;
-    gap: 0.75rem;
-    align-items: center;
-    margin-bottom: 0.7rem;
+    display: grid; grid-template-columns: 1fr auto 1fr; gap: 0.75rem; align-items: center; margin-bottom: 0.7rem;
   }
   .debrief-rule { height: 1px; background: var(--border); }
   .debrief-label { color: var(--ink-strong); font-weight: 800; letter-spacing: 0.02em; }
 
-  .debrief-company {
-    color: var(--ink-strong);
-    font-size: 1.3rem;
-    font-weight: 800;
-    margin: 0.1rem 0 0.75rem 0;
-  }
+  .debrief-company { color: var(--ink-strong); font-size: 1.3rem; font-weight: 800; margin: 0.1rem 0 0.75rem 0; }
 
   .debrief-section-title {
-    color: var(--ink);
-    font-weight: 800;
-    font-size: 1.02rem;
-    margin: 0 0 0.5rem 0;
-    padding-bottom: 0.4rem;
-    border-bottom: 1px solid var(--border);
+    color: var(--ink); font-weight: 800; font-size: 1.02rem; margin: 0 0 0.5rem 0; padding-bottom: 0.4rem; border-bottom: 1px solid var(--border);
   }
 
-  .debrief-paragraph { color: var(--ink); line-height: 1.65; margin: 0.25rem 0 0.5rem 0; }
+  .debrief-bullets { margin: 0.3rem 0 0.25rem 1.25rem; color: var(--ink); }
+  .debrief-bullets li { margin: 0.38rem 0; line-height: 1.55; }
 
-  .debrief-list { margin: 0.35rem 0 0.25rem 1.25rem; color: var(--ink); }
-  .debrief-list li { margin: 0.38rem 0; line-height: 1.55; }
+  .debrief-body { color: var(--ink); line-height: 1.6; }
+  .debrief-line { display: flex; gap: 0.5rem; margin: 0.35rem 0; }
+  .debrief-line .dot { color: var(--primary-2); }
+  .debrief-h { font-weight: 800; margin: 0.6rem 0 0.25rem 0; color: var(--ink); }
+  .debrief-text { margin: 0.25rem 0; color: var(--ink); }
+  .debrief-spacer { height: 0.45rem; }
+
+  .debrief-totals { margin-top: 0.6rem; color: var(--ink-soft); font-weight: 700; }
+  .debrief-totals .divider { margin: 0 0.5rem; color: #b88f6d; }
 
   .sources-title {
-    margin: 0.8rem 0 -0.2rem 0;
-    color: var(--ink-strong);
-    font-weight: 800;
-    font-size: 1rem;
-    border-top: 1px solid var(--border);
-    padding-top: 0.75rem;
+    margin: 0.8rem 0 -0.2rem 0; color: var(--ink-strong); font-weight: 800; font-size: 1rem;
+    border-top: 1px solid var(--border); padding-top: 0.75rem;
   }
 
   .summary-card {
-    background: var(--card-muted);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 1.1rem;
-    transition: all 0.2s ease;
+    background: var(--card-muted); border: 1px solid var(--border); border-radius: 12px; padding: 1.1rem; transition: all 0.2s ease;
   }
-
   .summary-card:hover { box-shadow: 0 6px 16px rgba(0,0,0,0.06); border-color: var(--border-strong); }
 
   .summary-meta { margin-bottom: 0.45rem; }
 
   .category-badge {
-    display: inline-block;
-    background: rgba(249, 115, 22, 0.14);
-    color: var(--primary-2);
-    border: 1px solid rgba(249, 115, 22, 0.34);
-    border-radius: 9999px;
-    padding: 0.12rem 0.5rem;
-    font-size: 0.72rem;
-    font-weight: 800;
+    display: inline-block; background: rgba(249, 115, 22, 0.14); color: var(--primary-2);
+    border: 1px solid rgba(249, 115, 22, 0.34); border-radius: 9999px; padding: 0.12rem 0.5rem; font-size: 0.72rem; font-weight: 800;
   }
 
   .date-badge {
-    display: inline-block;
-    background: #fff1e6;
-    color: var(--ink);
-    border-radius: 9999px;
-    padding: 0.12rem 0.5rem;
-    font-size: 0.72rem;
-    font-weight: 700;
-    margin-left: 0.5rem;
+    display: inline-block; background: #fff1e6; color: var(--ink); border-radius: 9999px;
+    padding: 0.12rem 0.5rem; font-size: 0.72rem; font-weight: 700; margin-left: 0.5rem;
   }
 
   .summary-content { color: var(--ink); line-height: 1.6; font-size: 0.96rem; }
-
-  .summary-link {
-    display: inline-block;
-    color: var(--primary-2);
-    font-weight: 800;
-    text-decoration: none;
-    margin-bottom: 0.25rem;
-  }
+  .summary-link { display: inline-block; color: var(--primary-2); font-weight: 800; text-decoration: none; margin-bottom: 0.25rem; }
   .summary-link:hover { text-decoration: underline; }
   .summary-link.disabled { color: var(--ink); font-weight: 800; margin-bottom: 0.25rem; }
-
   .summary-text { margin-top: 0.25rem; color: var(--ink-soft); }
 
   @media (max-width: 768px) {
