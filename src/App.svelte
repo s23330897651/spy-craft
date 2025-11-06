@@ -185,20 +185,34 @@
 				if (first && typeof first === 'object' && !Array.isArray(first)) {
 					const rec = first as Record<string, unknown>;
 
-					const title = typeof rec['title'] === 'string' ? rec['title'] : 'Content Debrief';
-					const fullBody = typeof rec['fullBody'] === 'string' ? rec['fullBody'] : undefined;
+					const title = typeof rec['title'] === 'string' && rec['title'].trim() ? rec['title'] : 'Content Debrief';
 
-					const exec_v2 = typeof rec['executive_summary'] === 'string' ? rec['executive_summary'] : undefined;
+					// Accept both "fullBody" and "fullContent"
+					const fullBodyPrimary = typeof rec['fullBody'] === 'string' ? rec['fullBody'] : undefined;
+					const fullBodyAlt = typeof rec['fullContent'] === 'string' ? rec['fullContent'] : undefined;
+					const fullBody = (fullBodyPrimary ?? fullBodyAlt) as string | undefined;
 
+					// Accept both "executive_summary" and "executiveSummary"
+					const execSnake = typeof rec['executive_summary'] === 'string' ? rec['executive_summary'] : undefined;
+					const execCamel = typeof rec['executiveSummary'] === 'string' ? rec['executiveSummary'] : undefined;
+
+					// Accept "bulletPoints", "supporting_points", or "supportingPoints"
 					const bpA = Array.isArray(rec['bulletPoints']) ? rec['bulletPoints'] as unknown[] : undefined;
 					const bpB = Array.isArray(rec['supporting_points']) ? rec['supporting_points'] as unknown[] : undefined;
+					const bpC = Array.isArray(rec['supportingPoints']) ? rec['supportingPoints'] as unknown[] : undefined;
 
 					let bullets: string[] = [];
 					if (bpA) bullets = bpA.filter((s) => typeof s === 'string').map((s: any) => normalizePoint(String(s)));
 					else if (bpB) bullets = bpB.filter((s) => typeof s === 'string').map((s: any) => normalizePoint(String(s)));
+					else if (bpC) bullets = bpC.filter((s) => typeof s === 'string').map((s: any) => normalizePoint(String(s)));
 					else bullets = extractBulletsFromFullBody(fullBody);
 
-					const executiveSummary = deriveExecutiveSummary(exec_v2, bullets, fullBody);
+					const executiveSummary = deriveExecutiveSummary(execSnake ?? execCamel, bullets, fullBody);
+
+					const bulletPointCount =
+						typeof rec['bulletPointCount'] === 'number'
+							? (rec['bulletPointCount'] as number)
+							: (typeof rec['supportingPointCount'] === 'number' ? (rec['supportingPointCount'] as number) : undefined);
 
 					debrief = {
 						title,
@@ -206,7 +220,7 @@
 						fullBody,
 						bulletPoints: bullets,
 						totals: (rec['totals'] && typeof rec['totals'] === 'object') ? rec['totals'] as Record<string, number> : undefined,
-						bulletPointCount: typeof rec['bulletPointCount'] === 'number' ? rec['bulletPointCount'] : undefined
+						bulletPointCount
 					};
 					remainingList = baseList.slice(1);
 				}
