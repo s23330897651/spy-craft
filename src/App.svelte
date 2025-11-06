@@ -452,17 +452,16 @@
 
 <style>
   :root {
-    /* Intelligent Resourcing–like teal/navy palette */
-    --bg: #0b1420;
-    --bg-2: #11263b;
+    --bg: #31160a;
+    --bg-2: #5a2a12;
     --text: #0b1b2b;
     --muted: #5b6b7a;
-    --primary: #00c2a8;
-    --primary-2: #008a7a;
+    --primary: #f97316;    /* orange-500 */
+    --primary-2: #ea580c;  /* orange-600 */
     --card: #ffffff;
-    --card-muted: #f6f9fb;
-    --border: #e4edf2;
-    --border-strong: #cfe0e8;
+    --card-muted: #f6f6f4;
+    --border: #f0e5db;
+    --border-strong: #e1cdbb;
     --danger: #ef4444;
     --danger-2: #dc2626;
     --ink-strong: #0b1b2b;
@@ -471,13 +470,7 @@
   }
 
   :global(body) {
-    margin: 0;
-    padding: 0;
     background: linear-gradient(135deg, var(--bg) 0%, var(--bg-2) 100%);
-    min-height: 100vh;
-    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    color-scheme: light;
-    color: var(--text);
   }
 
   .container {
@@ -540,7 +533,7 @@
   }
 
   .tab:focus-visible {
-    box-shadow: 0 0 0 3px rgba(0, 194, 168, 0.55);
+    box-shadow: 0 0 0 3px rgba(249, 115, 22, 0.55);
   }
 
   .tab.active {
@@ -551,17 +544,7 @@
 
   .badge {
     background: var(--primary);
-    color: #043a35;
-    border-radius: 9999px;
-    min-width: 24px;
-    height: 24px;
-    padding: 0 8px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 0.75rem;
-    font-weight: 800;
-    line-height: 1;
+    color: #3a1f04;
   }
 
   .content {
@@ -656,8 +639,7 @@
   }
 
   .submit-btn:hover:not(:disabled) {
-    transform: translateY(-2px);
-    box-shadow: 0 10px 24px rgba(0, 194, 168, 0.28);
+    box-shadow: 0 10px 24px rgba(249, 115, 22, 0.28);
   }
 
   .submit-btn:disabled { opacity: 0.75; cursor: not-allowed; transform: none; box-shadow: none; }
@@ -787,14 +769,9 @@
   .summary-meta { margin-bottom: 0.45rem; }
 
   .category-badge {
-    display: inline-block;
-    background: rgba(0, 194, 168, 0.14);
+    background: rgba(249, 115, 22, 0.14);
     color: var(--primary-2);
-    border: 1px solid rgba(0, 194, 168, 0.34);
-    border-radius: 9999px;
-    padding: 0.12rem 0.5rem;
-    font-size: 0.72rem;
-    font-weight: 800;
+    border: 1px solid rgba(249, 115, 22, 0.34);
   }
 
   .date-badge {
