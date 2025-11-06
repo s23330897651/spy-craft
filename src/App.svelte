@@ -17,6 +17,7 @@
 
 	interface Debrief {
 		title: string;
+		executiveSummary?: string;
 		fullBody?: string;
 		bulletPoints?: string[];
 		totals?: Record<string, number>;
@@ -61,16 +62,36 @@
 		return trimmed;
 	}
 
-	function normalizeBulletPoint(text: string): string {
-		return text
-			.replace(/^\s*-\s*/, '')
-			.replace(/^\s*\*\*\s*|\s*\*\*\s*$/g, '')
-			.trim();
+	const stripBold = (s: string) => s.replace(/^\s*\*\*\s*|\s*\*\*\s*$/g, '');
+	const normalizePoint = (s: string) => stripBold(s.replace(/^\s*-\s*/, '').trim());
+
+	function extractBulletsFromFullBody(fullBody?: string): string[] {
+		if (!fullBody) return [];
+		return fullBody
+			.split('\n')
+			.filter((l) => l.trim().startsWith('- '))
+			.map(normalizePoint)
+			.filter((t) => t.length > 0);
 	}
 
-	function prettyKey(key: string): string {
-		if (!key) return key;
-		return key.charAt(0).toUpperCase() + key.slice(1);
+	function extractParagraphFromFullBody(fullBody?: string): string | undefined {
+		if (!fullBody) return undefined;
+		const paras = fullBody
+			.split('\n')
+			.map((l) => l.trim())
+			.filter((l) => l.length > 0 && !l.startsWith('#') && !l.startsWith('- '));
+		return paras.length ? paras.join(' ') : undefined;
+	}
+
+	function deriveExecutiveSummary(existing?: string, bullets?: string[], fullBody?: string): string | undefined {
+		if (existing && existing.trim()) return existing.trim();
+		const fromBody = extractParagraphFromFullBody(fullBody);
+		if (fromBody) return fromBody;
+		if (bullets && bullets.length) {
+			const take = bullets.slice(0, 3);
+			return take.join(' ');
+		}
+		return undefined;
 	}
 
 	function getDisplayCompany(): string {
@@ -144,7 +165,6 @@
 				const category = typeof obj.category === 'string' ? obj.category : (categoryHint || 'Research');
 				const postedDate = typeof obj.postedDate === 'string' ? obj.postedDate : '';
 
-				// Skip if summary missing/empty
 				if (!isNonEmpty(summary)) return;
 
 				bucket.push({
@@ -158,29 +178,45 @@
 				});
 			};
 
-			// Normalize to list and extract debrief first (title + fullBody + bulletPoints)
+			// Normalize to list
 			const baseList: unknown[] = Array.isArray(data)
 				? data
 				: (data && typeof data === 'object' ? [data] : []);
 
 			let remainingList: unknown[] = baseList;
 
+			// Extract Debrief from first element. Supports:
+			// - { title, fullBody, bulletPoints, totals }
+			// - { title, executive_summary, supporting_points, totals }
 			if (baseList.length > 0) {
 				const first = peel(baseList[0]);
 				if (first && typeof first === 'object' && !Array.isArray(first)) {
 					const rec = first as Record<string, unknown>;
-					if ('title' in rec || 'fullBody' in rec || 'bulletPoints' in rec) {
-						debrief = {
-							title: typeof rec.title === 'string' ? rec.title : 'Content Debrief',
-							fullBody: typeof rec.fullBody === 'string' ? rec.fullBody : undefined,
-							bulletPoints: Array.isArray(rec.bulletPoints)
-								? (rec.bulletPoints as unknown[]).filter((s) => typeof s === 'string' && s.trim().length > 0) as string[]
-								: undefined,
-							totals: (rec.totals && typeof rec.totals === 'object') ? rec.totals as Record<string, number> : undefined,
-							bulletPointCount: typeof rec.bulletPointCount === 'number' ? rec.bulletPointCount : undefined
-						};
-						remainingList = baseList.slice(1);
-					}
+
+					const title = typeof rec['title'] === 'string' ? rec['title'] : 'Content Debrief';
+					const fullBody = typeof rec['fullBody'] === 'string' ? rec['fullBody'] : undefined;
+
+					const exec_v2 = typeof rec['executive_summary'] === 'string' ? rec['executive_summary'] : undefined;
+
+					const bpA = Array.isArray(rec['bulletPoints']) ? rec['bulletPoints'] as unknown[] : undefined;
+					const bpB = Array.isArray(rec['supporting_points']) ? rec['supporting_points'] as unknown[] : undefined;
+
+					let bullets: string[] = [];
+					if (bpA) bullets = bpA.filter((s) => typeof s === 'string').map((s: any) => normalizePoint(String(s)));
+					else if (bpB) bullets = bpB.filter((s) => typeof s === 'string').map((s: any) => normalizePoint(String(s)));
+					else bullets = extractBulletsFromFullBody(fullBody);
+
+					const executiveSummary = deriveExecutiveSummary(exec_v2, bullets, fullBody);
+
+					debrief = {
+						title,
+						executiveSummary,
+						fullBody,
+						bulletPoints: bullets,
+						totals: (rec['totals'] && typeof rec['totals'] === 'object') ? rec['totals'] as Record<string, number> : undefined,
+						bulletPointCount: typeof rec['bulletPointCount'] === 'number' ? rec['bulletPointCount'] : undefined
+					};
+					remainingList = baseList.slice(1);
 				}
 			}
 
@@ -390,26 +426,14 @@
                 <section class="debrief-exec" aria-labelledby="exec-summary-title">
                   <h5 id="exec-summary-title" class="debrief-section-title">Executive Summary</h5>
 
-                  {#if debrief.fullBody}
-                    <div class="debrief-body">
-                      {#each debrief.fullBody.split('\n') as line}
-                        {#if line.trim().startsWith('- ')}
-                          <!-- ignore list lines here to avoid duplicating with bulletPoints -->
-                        {:else if /^#{1,4}\s/.test(line)}
-                          <div class="debrief-h">{line.replace(/^#+\s/, '')}</div>
-                        {:else if line.trim().length === 0}
-                          <div class="debrief-spacer"></div>
-                        {:else}
-                          <p class="debrief-text">{line}</p>
-                        {/if}
-                      {/each}
-                    </div>
+                  {#if debrief.executiveSummary}
+                    <p class="debrief-paragraph">{debrief.executiveSummary}</p>
                   {/if}
 
-                  {#if debrief.bulletPoints && debrief.bulletPoints.length > 0}
+                  {#if debrief.bulletPoints && debrief.bulletPoints.length}
                     <ul class="debrief-bullets">
                       {#each debrief.bulletPoints as bp}
-                        <li><strong>{normalizeBulletPoint(bp)}</strong></li>
+                        <li><strong>{bp}</strong></li>
                       {/each}
                     </ul>
                   {/if}
@@ -418,7 +442,7 @@
                 {#if debrief.totals}
                   <footer class="debrief-totals">
                     {#if 'uncategorised' in debrief.totals}
-                      <span>Totals: {prettyKey('uncategorised')}: {debrief.totals['uncategorised']}</span>
+                      <span>Totals: Uncategorised: {debrief.totals['uncategorised']}</span>
                       <span class="divider">|</span>
                     {/if}
                     {#if 'overall' in debrief.totals}
@@ -464,6 +488,7 @@
 
 <style>
   :root {
+    /* Orangy theme */
     --bg: #31160a;
     --bg-2: #5a2a12;
     --text: #0b1b2b;
@@ -571,6 +596,7 @@
 
   .summaries-list { display: flex; flex-direction: column; gap: 1.25rem; }
 
+  /* Debrief card */
   .debrief-card {
     background: #ffffff; border: 1px solid var(--border); border-radius: 14px;
     padding: 1.25rem 1.25rem 1rem 1.25rem; box-shadow: 0 10px 24px rgba(0,0,0,0.06);
@@ -589,10 +615,7 @@
     color: var(--ink); font-weight: 800; font-size: 1rem; margin: 0.25rem 0 0.4rem 0; padding-bottom: 0.35rem; border-bottom: 1px solid var(--border);
   }
 
-  .debrief-body { color: var(--ink); line-height: 1.6; }
-  .debrief-h { font-weight: 800; margin: 0.6rem 0 0.25rem 0; color: var(--ink); }
-  .debrief-text { margin: 0.25rem 0; color: var(--ink); }
-  .debrief-spacer { height: 0.45rem; }
+  .debrief-paragraph { color: var(--ink); line-height: 1.65; margin: 0.25rem 0 0.5rem 0; }
 
   .debrief-bullets { margin: 0.35rem 0 0.25rem 1.25rem; color: var(--ink); }
   .debrief-bullets li { margin: 0.38rem 0; line-height: 1.55; }
